@@ -1,0 +1,99 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String       @id @default(uuid())
+  email        String       @unique
+  passwordHash String
+  createdAt    DateTime     @default(now())
+  workflows    Workflow[]
+  credentials  Credential[]
+
+  @@index([email])
+}
+
+model Workflow {
+  id         String   @id @default(uuid())
+  userId     String
+  name       String
+  nodesJson  Json
+  edgesJson  Json
+  isActive   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  executions Execution[]
+
+  @@index([userId])
+}
+
+model Credential {
+  id            String   @id @default(uuid())
+  userId        String
+  type          String
+  encryptedData String
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+enum ExecutionStatus {
+  running
+  success
+  failed
+}
+
+enum TriggerType {
+  manual
+  webhook
+  schedule
+}
+
+model Execution {
+  id          String          @id @default(uuid())
+  workflowId  String
+  status      ExecutionStatus @default(running)
+  startedAt   DateTime        @default(now())
+  finishedAt  DateTime?
+  triggerType TriggerType
+
+  workflow Workflow            @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  nodeRuns ExecutionNodeRun[]
+
+  @@index([workflowId])
+  @@index([status])
+}
+
+enum NodeRunStatus {
+  pending
+  running
+  success
+  failed
+  skipped
+}
+
+model ExecutionNodeRun {
+  id          String        @id @default(uuid())
+  executionId String
+  nodeId      String
+  status      NodeRunStatus @default(pending)
+  input       Json?
+  output      Json?
+  error       String?
+  startedAt   DateTime?
+  finishedAt  DateTime?
+
+  execution Execution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  @@index([executionId])
+  @@index([nodeId])
+}
