@@ -9,6 +9,9 @@ import { normalizeToItems, decodeBinary, makeBinary } from './nodes/types';
 import { publishStatus } from './pubsub/publisher';
 import './nodes'; // registers all node plugins as a side effect
 import { reloadCommunityNodes } from './nodes/communityLoader';
+import { acquireSlot, releaseSlot } from './engine/concurrency';
+import { DelayedError } from 'bullmq';
+import { startRetentionSweeper } from './utils/retention';
 
 const connection = createRedisConnection();
 
@@ -22,9 +25,12 @@ reloadSubscriber.on('message', (channel) => {
   console.log(`[community-nodes] reloaded ${loaded.length} package(s) after marketplace change`);
 });
 
+/** How long a job waits before retrying when it loses the concurrency-slot race. */
+const CONCURRENCY_RETRY_DELAY_MS = Number(process.env.CONCURRENCY_RETRY_DELAY_MS ?? 3000);
+
 const worker = new Worker<QueueJobData>(
   EXECUTION_QUEUE_NAME,
-  async (job) => {
+  async (job, token) => {
     if (job.name === 'testNode') {
       const { nodeType, params, input, credentialId } = job.data as TestNodeJobData;
       const plugin = NODE_REGISTRY[nodeType];
@@ -71,26 +77,45 @@ const worker = new Worker<QueueJobData>(
       throw new Error(`Workflow ${workflowId} not found`);
     }
 
+    // Per-workflow concurrency gate (Workflow.maxConcurrency, null =
+    // unlimited). If this workflow is already at its limit, don't run —
+    // reschedule this same job a few seconds out via BullMQ's manual
+    // rate-limiting mechanism (moveToDelayed + DelayedError) rather than
+    // failing it or busy-polling. The job keeps its original attempt count
+    // and retry history untouched; this is a deferral, not a failure.
+    const maxConcurrency = (workflow as { maxConcurrency?: number | null }).maxConcurrency ?? null;
+    const gotSlot = await acquireSlot(workflowId, maxConcurrency);
+    if (!gotSlot) {
+      await job.moveToDelayed(Date.now() + CONCURRENCY_RETRY_DELAY_MS, token);
+      throw new DelayedError();
+    }
+
     const graph = {
       nodes: workflow.nodesJson as never,
       edges: workflow.edgesJson as never,
     };
 
-    const result = await executeWorkflow(
-      workflowId,
-      graph,
-      triggerType,
-      triggerPayload,
-      (event) => {
-        publishStatus({ workflowId, ...event }).catch((err) =>
-          console.error('Failed to publish status event', err)
-        );
-      },
-      0,
-      executionId
-    );
+    try {
+      const result = await executeWorkflow(
+        workflowId,
+        graph,
+        triggerType,
+        triggerPayload,
+        (event) => {
+          publishStatus({ workflowId, ...event }).catch((err) =>
+            console.error('Failed to publish status event', err)
+          );
+        },
+        0,
+        executionId
+      );
 
-    return result;
+      return result;
+    } finally {
+      await releaseSlot(workflowId, maxConcurrency).catch((err) =>
+        console.error('Failed to release concurrency slot', err)
+      );
+    }
   },
   {
     connection,
@@ -108,5 +133,10 @@ worker.on('failed', (job, err) => {
   // executeWorkflow and recorded as 'failed' node runs without throwing.
   console.error(`[worker] job ${job?.id} failed:`, err.message);
 });
+
+// Periodically prunes old Execution/ExecutionNodeRun rows per
+// EXECUTION_RETENTION_DAYS (unset/0 = retention disabled, keep everything —
+// see apps/worker/src/utils/retention.ts for the query and scheduling).
+startRetentionSweeper();
 
 console.log('FlowForge worker started, waiting for jobs...');

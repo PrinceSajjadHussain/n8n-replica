@@ -169,6 +169,16 @@ export default function ExecutionHistoryPage() {
   const [viewMode, setViewMode] = useState<ViewMode>('table');
   const [retryBusyNodeId, setRetryBusyNodeId] = useState<string | null>(null);
   const [retryMessage, setRetryMessage] = useState<string | null>(null);
+  // nodeId -> { type, params }, fetched once from the workflow's current
+  // graph so "Explain failure" can send the AI real node context instead of
+  // just the error string. Best-effort: a node deleted/renamed since the
+  // run just falls back to a generic explanation (still asks the model,
+  // just with less context).
+  const [nodeMeta, setNodeMeta] = useState<Record<string, { type: string; params: Record<string, unknown> }>>({});
+  const [explainBusyNodeId, setExplainBusyNodeId] = useState<string | null>(null);
+  const [explanations, setExplanations] = useState<
+    Record<string, { diagnosis: string; likelyCause: string; suggestedFix: string; confidence: string } | { error: string }>
+  >({});
   const [stats, setStats] = useState<{
     total: number;
     succeeded: number;
@@ -205,9 +215,43 @@ export default function ExecutionHistoryPage() {
     setExecutions(data.executions);
   }
 
+  async function loadNodeMeta() {
+    try {
+      const { data } = await api.get(`/workflows/${workflowId}`);
+      const nodes = (data.workflow?.nodesJson ?? []) as Array<{ id: string; type: string; params?: Record<string, unknown> }>;
+      const map: Record<string, { type: string; params: Record<string, unknown> }> = {};
+      for (const n of nodes) map[n.id] = { type: n.type, params: n.params ?? {} };
+      setNodeMeta(map);
+    } catch {
+      // Non-critical — "Explain failure" still works with a generic label if this fails.
+    }
+  }
+
+  async function explainFailure(run: NodeRun) {
+    setExplainBusyNodeId(run.id);
+    try {
+      const meta = nodeMeta[run.nodeId];
+      const { data } = await api.post('/ai/explain-failure', {
+        nodeType: meta?.type ?? run.nodeId,
+        params: meta?.params ?? {},
+        error: run.error ?? 'Unknown error',
+        input: run.input,
+      });
+      setExplanations((prev) => ({ ...prev, [run.id]: data.diagnosis }));
+    } catch (err: any) {
+      setExplanations((prev) => ({
+        ...prev,
+        [run.id]: { error: err?.response?.data?.error ?? 'Failed to get an explanation' },
+      }));
+    } finally {
+      setExplainBusyNodeId(null);
+    }
+  }
+
   useEffect(() => {
     load();
     loadStats();
+    loadNodeMeta();
     const interval = setInterval(load, 4000); // light polling for status updates
     return () => clearInterval(interval);
   }, [workflowId]);
@@ -322,8 +366,38 @@ export default function ExecutionHistoryPage() {
                   {expandedNode === run.id && (
                     <div className="px-4 pb-4 space-y-3 border-t border-panelBorder pt-3">
                       {run.error && (
-                        <div className="text-alert text-xs bg-alert/10 border border-alert/30 rounded-md px-3 py-2">
-                          {run.error}
+                        <div className="text-alert text-xs bg-alert/10 border border-alert/30 rounded-md px-3 py-2 space-y-2">
+                          <p>{run.error}</p>
+                          <button
+                            onClick={() => explainFailure(run)}
+                            disabled={explainBusyNodeId === run.id}
+                            className="focus-ring text-[11px] px-2 py-1 rounded border border-alert/40 hover:bg-alert/10 transition disabled:opacity-40"
+                          >
+                            {explainBusyNodeId === run.id ? 'Asking AI…' : '✨ Explain failure'}
+                          </button>
+                          {explanations[run.id] && (
+                            'error' in explanations[run.id] ? (
+                              <p className="text-[11px] text-muted">{(explanations[run.id] as { error: string }).error}</p>
+                            ) : (
+                              (() => {
+                                const d = explanations[run.id] as {
+                                  diagnosis: string;
+                                  likelyCause: string;
+                                  suggestedFix: string;
+                                  confidence: string;
+                                };
+                                return (
+                                  <div className="text-ink bg-canvas border border-panelBorder rounded-md px-3 py-2 space-y-1">
+                                    <p className="text-[10px] uppercase text-muted">
+                                      Likely cause: {d.likelyCause} · confidence: {d.confidence}
+                                    </p>
+                                    <p>{d.diagnosis}</p>
+                                    <p className="text-signal">Suggested fix: {d.suggestedFix}</p>
+                                  </div>
+                                );
+                              })()
+                            )
+                          )}
                         </div>
                       )}
                       <div className="flex items-center justify-end">

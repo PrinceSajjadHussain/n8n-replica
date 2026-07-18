@@ -12,6 +12,7 @@ export interface Workflow {
   folderId: string | null;
   errorWorkflowId: string | null;
   lastManualTestPayload: unknown;
+  maxConcurrency: number | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -78,7 +79,10 @@ export async function updateWorkflow(
   id: string,
   userId: string,
   fields: Partial<
-    Pick<Workflow, 'name' | 'nodesJson' | 'edgesJson' | 'isActive' | 'folderId' | 'errorWorkflowId' | 'lastManualTestPayload'>
+    Pick<
+      Workflow,
+      'name' | 'nodesJson' | 'edgesJson' | 'isActive' | 'folderId' | 'errorWorkflowId' | 'lastManualTestPayload' | 'maxConcurrency'
+    >
   >
 ): Promise<Workflow | null> {
   const sets: string[] = [];
@@ -112,6 +116,10 @@ export async function updateWorkflow(
   if (fields.lastManualTestPayload !== undefined) {
     sets.push(`"lastManualTestPayload" = $${idx++}`);
     values.push(JSON.stringify(fields.lastManualTestPayload));
+  }
+  if (fields.maxConcurrency !== undefined) {
+    sets.push(`"maxConcurrency" = $${idx++}`);
+    values.push(fields.maxConcurrency);
   }
   sets.push(`"updatedAt" = now()`);
 

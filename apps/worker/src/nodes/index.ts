@@ -7,6 +7,7 @@ import './codeNode';
 import './mergeNode';
 import './slackNode';
 import './openaiNode';
+import './anthropicNode';
 import './ragNode';
 import './browserAutomationNode';
 import './switchNode';

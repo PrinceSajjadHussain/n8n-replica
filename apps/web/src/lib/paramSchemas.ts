@@ -117,6 +117,22 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
     ],
   },
 
+  anthropic: {
+    fields: [
+      { key: 'model', label: 'Model', type: 'string', default: 'claude-sonnet-4-5-20250929', placeholder: 'claude-sonnet-4-5-20250929' },
+      { key: 'systemPrompt', label: 'System prompt', type: 'text', help: 'Optional system message.' },
+      {
+        key: 'prompt',
+        label: 'Prompt',
+        type: 'expression',
+        default: '{{input}}',
+        help: 'Use {{input}} to splice in the upstream node\u2019s JSON output.',
+      },
+      { key: 'temperature', label: 'Temperature', type: 'number', default: 0.3, min: 0, max: 1, step: 0.1 },
+      { key: 'maxTokens', label: 'Max tokens', type: 'number', default: 1024, min: 1, max: 8192, step: 1 },
+    ],
+  },
+
   slack: {
     fields: [
       { key: 'text', label: 'Message text', type: 'expression', placeholder: 'New order received!' },

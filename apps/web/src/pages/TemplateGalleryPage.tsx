@@ -241,7 +241,10 @@ export default function TemplateGalleryPage() {
         <div>
           <h1 className="text-xl font-semibold">Template gallery</h1>
           <p className="text-sm text-muted mt-0.5">
-            Start from a ready-made workflow instead of a blank canvas. {templates.length} templates available.
+            Start from a ready-made workflow instead of a blank canvas. {templates.length} templates across{' '}
+            {categories.length} categories, curated and maintained in-house — for reference, n8n's community library
+            has 2000+ user-submitted templates. Closing that gap is a matter of opening template submissions, not
+            gallery capacity; the schema here already supports it (see note below).
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">

@@ -1,0 +1,53 @@
+{
+  "nav": {
+    "workflows": "Flujos de trabajo",
+    "workspaces": "Espacios de trabajo",
+    "credentials": "Credenciales",
+    "variables": "Variables",
+    "dataTables": "Tablas de datos",
+    "templates": "Plantillas",
+    "marketplace": "Mercado",
+    "billing": "Facturación",
+    "search": "Buscar…",
+    "signOut": "Cerrar sesión",
+    "theme": "Tema",
+    "language": "Idioma"
+  },
+  "workflows": {
+    "title": "Flujos de trabajo",
+    "new": "+ Nuevo flujo de trabajo",
+    "loading": "Cargando…",
+    "emptyTitle": "Aún no hay flujos de trabajo",
+    "emptyTagTitle": "No hay flujos de trabajo con esta etiqueta",
+    "emptyDescription": "Los flujos de trabajo son la forma de automatizar cualquier cosa en FlowForge: conecta un disparador a una cadena de acciones y déjalo funcionar solo.",
+    "emptyTagDescription": "Prueba con otra etiqueta o quita el filtro para ver todos los flujos de trabajo.",
+    "browseTemplates": "Explorar plantillas",
+    "active": "Activo",
+    "inactive": "Inactivo",
+    "updated": "Actualizado {{date}}",
+    "emptyFolder": "Aún no hay flujos de trabajo en esta carpeta — arrastra uno desde otra carpeta."
+  },
+  "folders": {
+    "title": "Carpetas",
+    "new": "+ Nueva",
+    "allWorkflows": "Todos los flujos de trabajo",
+    "newSubfolder": "+ Subcarpeta",
+    "rename": "Renombrar",
+    "delete": "Eliminar",
+    "empty": "Aún no hay carpetas — crea una para organizar tus flujos de trabajo."
+  },
+  "billing": {
+    "title": "Facturación y uso",
+    "currentPlan": "Plan actual",
+    "usageThisPeriod": "Uso de este período",
+    "executions": "Ejecuciones",
+    "manage": "Gestionar suscripción",
+    "upgrade": "Mejorar plan",
+    "choosePlan": "Elige un plan"
+  },
+  "common": {
+    "cancel": "Cancelar",
+    "save": "Guardar",
+    "confirm": "Confirmar"
+  }
+}

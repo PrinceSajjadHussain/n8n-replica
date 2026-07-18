@@ -23,6 +23,7 @@ import { logActivity } from '../db/activity';
 import { listWorkspacesForUser } from '../db/workspaces';
 import { listWorkflowIdsForTag } from '../db/tags';
 import { findUserPublicByEmail } from '../db/users';
+import { incrementUsage, isWithinUsageLimit } from '../db/billing';
 
 const redisConnection = createRedisConnection();
 const executionQueue = createExecutionQueue(redisConnection);
@@ -73,6 +74,10 @@ const workflowUpdateSchema = z.object({
   edges: z.array(edgeSchema).optional(),
   folderId: z.string().nullable().optional(),
   errorWorkflowId: z.string().nullable().optional(),
+  // Cap on concurrent in-flight executions of this workflow (see
+  // apps/worker/src/engine/concurrency.ts). null clears the cap
+  // (unlimited); omit the field entirely to leave it unchanged.
+  maxConcurrency: z.number().int().min(1).max(1000).nullable().optional(),
 });
 
 /** GET /workflows?workspaceId=... — all workflows the user can see, optionally scoped to one workspace. */
@@ -123,13 +128,14 @@ workflowsRouter.put('/:id', requireWorkflowRole('editor'), async (req: AuthedReq
   try {
     const parsed = workflowUpdateSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-    const { name, nodes, edges, folderId, errorWorkflowId } = parsed.data;
+    const { name, nodes, edges, folderId, errorWorkflowId, maxConcurrency } = parsed.data;
     const workflow = await updateWorkflow(req.params.id, req.userId!, {
       name,
       nodesJson: nodes,
       edgesJson: edges,
       folderId,
       errorWorkflowId,
+      maxConcurrency,
     });
     if (!workflow) return res.status(404).json({ error: 'Workflow not found' });
     await logActivity({
@@ -225,6 +231,16 @@ workflowsRouter.post('/:id/execute', async (req: AuthedRequest, res) => {
   const workflow = await getWorkflowById(req.params.id, req.userId!);
   if (!workflow) return res.status(404).json({ error: 'Workflow not found' });
 
+  if (workflow.workspaceId) {
+    const { ok, used, limit } = await isWithinUsageLimit(workflow.workspaceId);
+    if (!ok) {
+      return res.status(402).json({
+        error: `Monthly execution limit reached (${used}/${limit}). Upgrade the workspace plan to keep running workflows.`,
+        code: 'usage_limit_exceeded',
+      });
+    }
+  }
+
   // Manual runs with no explicit body fall back to (and re-persist) the
   // workflow's last saved manual test payload, matching n8n's canvas
   // behavior of remembering the last "test workflow" input.
@@ -242,6 +258,7 @@ workflowsRouter.post('/:id/execute', async (req: AuthedRequest, res) => {
     triggerPayload,
   };
   const job = await executionQueue.add('execute', jobData);
+  if (workflow.workspaceId) incrementUsage(workflow.workspaceId).catch(() => {});
 
   res.status(202).json({ message: 'Execution enqueued', jobId: job.id });
 });

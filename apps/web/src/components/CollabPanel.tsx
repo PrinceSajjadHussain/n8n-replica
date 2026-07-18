@@ -357,14 +357,21 @@ interface WorkflowOption {
 function SettingsTab({ workflowId }: { workflowId: string }) {
   const [workflows, setWorkflows] = useState<WorkflowOption[]>([]);
   const [errorWorkflowId, setErrorWorkflowId] = useState<string | null>(null);
+  const [maxConcurrency, setMaxConcurrency] = useState<number | null>(null);
+  const [maxConcurrencyInput, setMaxConcurrencyInput] = useState('');
   const [saved, setSaved] = useState<string | null>(null);
+  const [concurrencySaved, setConcurrencySaved] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [concurrencyBusy, setConcurrencyBusy] = useState(false);
 
   useEffect(() => {
     Promise.all([api.get('/workflows'), api.get(`/workflows/${workflowId}`)]).then(
       ([{ data: listData }, { data: wfData }]) => {
         setWorkflows((listData.workflows ?? []).filter((w: WorkflowOption) => w.id !== workflowId));
         setErrorWorkflowId(wfData.workflow?.errorWorkflowId ?? null);
+        const mc = wfData.workflow?.maxConcurrency ?? null;
+        setMaxConcurrency(mc);
+        setMaxConcurrencyInput(mc == null ? '' : String(mc));
       }
     );
   }, [workflowId]);
@@ -380,6 +387,27 @@ function SettingsTab({ workflowId }: { workflowId: string }) {
       setBusy(false);
     }
   }
+
+  async function saveConcurrency() {
+    const trimmed = maxConcurrencyInput.trim();
+    const nextValue = trimmed === '' ? null : Math.max(1, Math.min(1000, Math.round(Number(trimmed))));
+    if (trimmed !== '' && (!Number.isFinite(Number(trimmed)) || Number(trimmed) < 1)) {
+      setConcurrencySaved('Enter a whole number of 1 or more, or leave blank for unlimited.');
+      return;
+    }
+    setConcurrencyBusy(true);
+    setConcurrencySaved(null);
+    try {
+      await api.put(`/workflows/${workflowId}`, { maxConcurrency: nextValue });
+      setMaxConcurrency(nextValue);
+      setMaxConcurrencyInput(nextValue == null ? '' : String(nextValue));
+      setConcurrencySaved('Saved.');
+    } finally {
+      setConcurrencyBusy(false);
+    }
+  }
+
+  const concurrencyDirty = maxConcurrencyInput.trim() !== (maxConcurrency == null ? '' : String(maxConcurrency));
 
   return (
     <div className="space-y-4">
@@ -410,6 +438,36 @@ function SettingsTab({ workflowId }: { workflowId: string }) {
         {workflows.length === 0 && (
           <p className="text-[11px] text-muted mt-1">Create another workflow first to use it as an error handler.</p>
         )}
+      </div>
+
+      <div className="pt-3 border-t border-panelBorder">
+        <p className="text-sm font-medium mb-1">Max concurrent executions</p>
+        <p className="text-xs text-muted mb-2">
+          Caps how many runs of this workflow can be in flight at once — a burst of webhook triggers (or a busy
+          schedule) queues past this limit instead of hammering whatever API/DB the workflow calls. Leave blank for
+          unlimited (subject only to the worker's global concurrency setting).
+        </p>
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min={1}
+            max={1000}
+            step={1}
+            placeholder="Unlimited"
+            value={maxConcurrencyInput}
+            disabled={concurrencyBusy}
+            onChange={(e) => setMaxConcurrencyInput(e.target.value)}
+            className="focus-ring w-32 bg-transparent border border-panelBorder rounded-md px-2.5 py-1.5 text-sm"
+          />
+          <button
+            onClick={saveConcurrency}
+            disabled={concurrencyBusy || !concurrencyDirty}
+            className="focus-ring text-sm px-3 py-1.5 rounded-md border border-panelBorder hover:border-signal/50 transition disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {concurrencyBusy ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+        {concurrencySaved && <p className="text-[11px] text-signal mt-1">{concurrencySaved}</p>}
       </div>
     </div>
   );

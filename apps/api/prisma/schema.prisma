@@ -59,6 +59,13 @@ model Workflow {
   /// any node's params.
   staticData Json @default("{}")
 
+  /// Max number of this workflow's executions allowed to run concurrently.
+  /// null/unset = unlimited (subject only to the global WORKER_CONCURRENCY
+  /// cap). Enforced in the worker via a Redis-backed slot count — see
+  /// apps/worker/src/engine/concurrency.ts. Set from the canvas toolbar's
+  /// "Settings" panel or PUT /workflows/:id.
+  maxConcurrency Int?
+
   user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   executions Execution[]
   versions   WorkflowVersion[]
@@ -185,8 +192,45 @@ model Workspace {
   tags      Tag[]
   dataTables DataTable[]
   logStreamConfigs LogStreamConfig[]
+  subscription Subscription?
+  usageCounters UsageCounter[]
 
   @@index([ownerId])
+}
+
+/// One billing subscription per workspace — the platform-level plan
+/// (free/pro/business), as opposed to the `stripe` workflow node which lets
+/// a workflow call the Stripe API as an integration action.
+model Subscription {
+  id                   String   @id @default(uuid())
+  workspaceId          String   @unique
+  plan                 String   @default("free")
+  status               String   @default("active")
+  stripeCustomerId     String?
+  stripeSubscriptionId String?  @unique
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([stripeCustomerId])
+}
+
+/// Per-workspace, per-calendar-month execution counter used to enforce plan
+/// limits and to render the usage bar in BillingPage.tsx.
+model UsageCounter {
+  id             String   @id @default(uuid())
+  workspaceId    String
+  period         String
+  executionCount Int      @default(0)
+  updatedAt      DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, period])
 }
 
 model WorkspaceMember {

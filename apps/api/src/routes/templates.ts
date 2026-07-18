@@ -842,6 +842,260 @@ const TEMPLATES: Template[] = [
       ],
     },
   },
+  {
+    id: 'marketing-new-subscriber-welcome',
+    name: 'New subscriber → welcome sequence',
+    description: 'Tags a new mailing-list subscriber and kicks off a personalized welcome email via HTTP request to the ESP.',
+    category: 'Marketing',
+    difficulty: 'beginner',
+    estimatedSetupMinutes: 10,
+    usageCount: 512,
+    graph: {
+      nodes: [
+        { id: 't1', type: 'webhook', label: 'New subscriber', position: { x: 0, y: 0 }, params: {} },
+        { id: 't2', type: 'set', label: 'Build welcome payload', position: { x: 260, y: 0 }, params: {} },
+        { id: 't3', type: 'httpRequest', label: 'Send via ESP API', position: { x: 520, y: 0 }, params: {} },
+      ],
+      edges: [
+        { id: 'e1', source: 't1', target: 't2' },
+        { id: 'e2', source: 't2', target: 't3' },
+      ],
+    },
+  },
+  {
+    id: 'marketing-social-post-approval',
+    name: 'Social post draft → human approval → publish',
+    description: 'Drafts a social post with AI, waits for a marketer to approve, then posts it — a lightweight content-review loop.',
+    category: 'Marketing',
+    difficulty: 'intermediate',
+    estimatedSetupMinutes: 15,
+    usageCount: 201,
+    graph: {
+      nodes: [
+        { id: 't1', type: 'schedule', label: 'Weekly content slot', position: { x: 0, y: 0 }, params: {} },
+        { id: 't2', type: 'openai', label: 'Draft post copy', position: { x: 260, y: 0 }, params: {} },
+        { id: 't3', type: 'humanApproval', label: 'Marketer review', position: { x: 520, y: 0 }, params: {} },
+        { id: 't4', type: 'httpRequest', label: 'Publish', position: { x: 780, y: 0 }, params: {} },
+      ],
+      edges: [
+        { id: 'e1', source: 't1', target: 't2' },
+        { id: 'e2', source: 't2', target: 't3' },
+        { id: 'e3', source: 't3', target: 't4' },
+      ],
+    },
+  },
+  {
+    id: 'hr-new-hire-onboarding',
+    name: 'New hire → onboarding checklist',
+    description: 'On a new-hire webhook, creates onboarding tasks in Notion and notifies the hiring manager on Slack.',
+    category: 'HR',
+    difficulty: 'beginner',
+    estimatedSetupMinutes: 12,
+    usageCount: 168,
+    graph: {
+      nodes: [
+        { id: 't1', type: 'webhook', label: 'New hire recorded', position: { x: 0, y: 0 }, params: {} },
+        { id: 't2', type: 'notion', label: 'Create onboarding board', position: { x: 260, y: -50 }, params: {} },
+        { id: 't3', type: 'slack', label: 'Notify manager', position: { x: 260, y: 50 }, params: {} },
+      ],
+      edges: [
+        { id: 'e1', source: 't1', target: 't2' },
+        { id: 'e2', source: 't1', target: 't3' },
+      ],
+    },
+  },
+  {
+    id: 'hr-timeoff-request-routing',
+    name: 'Time-off request → manager approval',
+    description: 'Routes a submitted time-off request to the requester\'s manager for approval before it is logged.',
+    category: 'HR',
+    difficulty: 'intermediate',
+    estimatedSetupMinutes: 14,
+    usageCount: 97,
+    graph: {
+      nodes: [
+        { id: 't1', type: 'webhook', label: 'Time-off requested', position: { x: 0, y: 0 }, params: {} },
+        { id: 't2', type: 'humanApproval', label: 'Manager approval', position: { x: 260, y: 0 }, params: {} },
+        { id: 't3', type: 'if', label: 'Approved?', position: { x: 520, y: 0 }, params: {} },
+        { id: 't4', type: 'postgres', label: 'Log approved leave', position: { x: 780, y: -60 }, params: {} },
+        { id: 't5', type: 'slack', label: 'Notify denial', position: { x: 780, y: 60 }, params: {} },
+      ],
+      edges: [
+        { id: 'e1', source: 't1', target: 't2' },
+        { id: 'e2', source: 't2', target: 't3' },
+        { id: 'e3', source: 't3', target: 't4', sourceHandle: 'true' },
+        { id: 'e4', source: 't3', target: 't5', sourceHandle: 'false' },
+      ],
+    },
+  },
+  {
+    id: 'finance-invoice-paid-reconcile',
+    name: 'Stripe invoice paid → reconcile + notify finance',
+    description: 'Listens for a paid invoice and writes a reconciliation row to Postgres, then pings the finance channel.',
+    category: 'Finance',
+    difficulty: 'intermediate',
+    estimatedSetupMinutes: 13,
+    usageCount: 233,
+    graph: {
+      nodes: [
+        { id: 't1', type: 'stripe', label: 'Invoice paid', position: { x: 0, y: 0 }, params: {} },
+        { id: 't2', type: 'postgres', label: 'Insert reconciliation row', position: { x: 260, y: 0 }, params: {} },
+        { id: 't3', type: 'slack', label: 'Notify #finance', position: { x: 520, y: 0 }, params: {} },
+      ],
+      edges: [
+        { id: 'e1', source: 't1', target: 't2' },
+        { id: 'e2', source: 't2', target: 't3' },
+      ],
+    },
+  },
+  {
+    id: 'finance-failed-payment-dunning',
+    name: 'Failed payment → dunning email',
+    description: 'On a failed Stripe charge, sends a payment-retry email to the customer and logs the attempt.',
+    category: 'Finance',
+    difficulty: 'beginner',
+    estimatedSetupMinutes: 9,
+    usageCount: 178,
+    graph: {
+      nodes: [
+        { id: 't1', type: 'stripe', label: 'Charge failed', position: { x: 0, y: 0 }, params: {} },
+        { id: 't2', type: 'email', label: 'Send dunning email', position: { x: 260, y: 0 }, params: {} },
+        { id: 't3', type: 'postgres', label: 'Log attempt', position: { x: 520, y: 0 }, params: {} },
+      ],
+      edges: [
+        { id: 'e1', source: 't1', target: 't2' },
+        { id: 'e2', source: 't2', target: 't3' },
+      ],
+    },
+  },
+  {
+    id: 'security-failed-login-alert',
+    name: 'Repeated failed logins → security alert',
+    description: 'Watches an auth-event stream and pages the security channel when failures exceed a threshold.',
+    category: 'Security',
+    difficulty: 'advanced',
+    estimatedSetupMinutes: 20,
+    usageCount: 84,
+    graph: {
+      nodes: [
+        { id: 't1', type: 'streamTrigger', label: 'Auth events stream', position: { x: 0, y: 0 }, params: {} },
+        { id: 't2', type: 'code', label: 'Count recent failures', position: { x: 260, y: 0 }, params: {} },
+        { id: 't3', type: 'if', label: 'Over threshold?', position: { x: 520, y: 0 }, params: {} },
+        { id: 't4', type: 'slack', label: 'Page security', position: { x: 780, y: 0 }, params: {} },
+      ],
+      edges: [
+        { id: 'e1', source: 't1', target: 't2' },
+        { id: 'e2', source: 't2', target: 't3' },
+        { id: 'e3', source: 't3', target: 't4', sourceHandle: 'true' },
+      ],
+    },
+  },
+  {
+    id: 'security-secret-rotation-reminder',
+    name: 'Scheduled secret rotation reminder',
+    description: 'A recurring schedule that reminds the on-call engineer to rotate API keys and logs each reminder.',
+    category: 'Security',
+    difficulty: 'beginner',
+    estimatedSetupMinutes: 6,
+    usageCount: 61,
+    graph: {
+      nodes: [
+        { id: 't1', type: 'schedule', label: 'Every 90 days', position: { x: 0, y: 0 }, params: {} },
+        { id: 't2', type: 'slack', label: 'Remind on-call', position: { x: 260, y: 0 }, params: {} },
+        { id: 't3', type: 'postgres', label: 'Log reminder sent', position: { x: 520, y: 0 }, params: {} },
+      ],
+      edges: [
+        { id: 'e1', source: 't1', target: 't2' },
+        { id: 'e2', source: 't2', target: 't3' },
+      ],
+    },
+  },
+  {
+    id: 'productivity-daily-standup-digest',
+    name: 'Daily standup digest from Slack threads',
+    description: 'Every morning, collects yesterday\'s standup thread replies and posts a summarized digest.',
+    category: 'Productivity',
+    difficulty: 'intermediate',
+    estimatedSetupMinutes: 16,
+    usageCount: 143,
+    graph: {
+      nodes: [
+        { id: 't1', type: 'schedule', label: 'Every weekday 8am', position: { x: 0, y: 0 }, params: {} },
+        { id: 't2', type: 'slack', label: 'Fetch thread replies', position: { x: 260, y: 0 }, params: {} },
+        { id: 't3', type: 'openai', label: 'Summarize updates', position: { x: 520, y: 0 }, params: {} },
+        { id: 't4', type: 'slack', label: 'Post digest', position: { x: 780, y: 0 }, params: {} },
+      ],
+      edges: [
+        { id: 'e1', source: 't1', target: 't2' },
+        { id: 'e2', source: 't2', target: 't3' },
+        { id: 'e3', source: 't3', target: 't4' },
+      ],
+    },
+  },
+  {
+    id: 'productivity-meeting-notes-to-tasks',
+    name: 'Meeting notes → action items in Notion',
+    description: 'Extracts action items from uploaded meeting notes with AI and creates a task per item in Notion.',
+    category: 'Productivity',
+    difficulty: 'intermediate',
+    estimatedSetupMinutes: 15,
+    usageCount: 176,
+    graph: {
+      nodes: [
+        { id: 't1', type: 'fileWatcher', label: 'Notes file added', position: { x: 0, y: 0 }, params: {} },
+        { id: 't2', type: 'fileExtract', label: 'Extract text', position: { x: 260, y: 0 }, params: {} },
+        { id: 't3', type: 'openai', label: 'Extract action items', position: { x: 520, y: 0 }, params: {} },
+        { id: 't4', type: 'forEach', label: 'For each item', position: { x: 780, y: 0 }, params: {} },
+        { id: 't5', type: 'notion', label: 'Create task', position: { x: 1040, y: 0 }, params: {} },
+      ],
+      edges: [
+        { id: 'e1', source: 't1', target: 't2' },
+        { id: 'e2', source: 't2', target: 't3' },
+        { id: 'e3', source: 't3', target: 't4' },
+        { id: 'e4', source: 't4', target: 't5' },
+      ],
+    },
+  },
+  {
+    id: 'iot-sensor-threshold-alert',
+    name: 'IoT sensor reading → threshold alert',
+    description: 'Consumes sensor readings from a Kafka topic and alerts when a value crosses a configured threshold.',
+    category: 'IoT',
+    difficulty: 'advanced',
+    estimatedSetupMinutes: 22,
+    usageCount: 47,
+    graph: {
+      nodes: [
+        { id: 't1', type: 'streamTrigger', label: 'Sensor readings (Kafka)', position: { x: 0, y: 0 }, params: {} },
+        { id: 't2', type: 'if', label: 'Over threshold?', position: { x: 260, y: 0 }, params: {} },
+        { id: 't3', type: 'twilio', label: 'SMS on-call', position: { x: 520, y: 0 }, params: {} },
+      ],
+      edges: [
+        { id: 'e1', source: 't1', target: 't2' },
+        { id: 'e2', source: 't2', target: 't3', sourceHandle: 'true' },
+      ],
+    },
+  },
+  {
+    id: 'ecommerce-abandoned-cart-followup',
+    name: 'Abandoned cart → recovery email',
+    description: 'When a Shopify cart is abandoned for a while, waits, then sends a personalized recovery email.',
+    category: 'E-commerce',
+    difficulty: 'intermediate',
+    estimatedSetupMinutes: 14,
+    usageCount: 289,
+    graph: {
+      nodes: [
+        { id: 't1', type: 'shopify', label: 'Cart abandoned', position: { x: 0, y: 0 }, params: {} },
+        { id: 't2', type: 'wait', label: 'Wait 2 hours', position: { x: 260, y: 0 }, params: {} },
+        { id: 't3', type: 'email', label: 'Send recovery email', position: { x: 520, y: 0 }, params: {} },
+      ],
+      edges: [
+        { id: 'e1', source: 't1', target: 't2' },
+        { id: 'e2', source: 't2', target: 't3' },
+      ],
+    },
+  },
 ];
 
 /** Distinct node "app" types in a template's graph, in graph order — drives the

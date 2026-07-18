@@ -12,10 +12,12 @@ import MarketplacePage from './pages/MarketplacePage';
 import ApiTokensPage from './pages/ApiTokensPage';
 import AuditLogPage from './pages/AuditLogPage';
 import RbacPage from './pages/RbacPage';
+import FailedJobsPage from './pages/FailedJobsPage';
 import SsoSettingsPage from './pages/SsoSettingsPage';
 import VariablesPage from './pages/VariablesPage';
 import DataTablesPage from './pages/DataTablesPage';
 import WorkflowTestsPage from './pages/WorkflowTestsPage';
+import BillingPage from './pages/BillingPage';
 import ProtectedRoute from './components/ProtectedRoute';
 
 const queryClient = new QueryClient();
@@ -100,6 +102,14 @@ export default function App() {
             }
           />
           <Route
+            path="/billing"
+            element={
+              <ProtectedRoute>
+                <BillingPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
             path="/data-tables"
             element={
               <ProtectedRoute>
@@ -136,6 +146,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <SsoSettingsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/queue"
+            element={
+              <ProtectedRoute>
+                <FailedJobsPage />
               </ProtectedRoute>
             }
           />

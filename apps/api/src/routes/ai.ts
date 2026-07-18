@@ -116,3 +116,94 @@ aiRouter.post('/generate-workflow', async (req: AuthedRequest, res) => {
     res.status(502).json({ error: `AI generation failed: ${message}` });
   }
 });
+
+const explainSchema = z.object({
+  nodeType: z.string().min(1),
+  params: z.record(z.unknown()).optional(),
+  error: z.string().min(1),
+  input: z.unknown().optional(),
+  credentialId: z.string().optional(), // an "openai" credential id; falls back to server OPENAI_API_KEY
+  model: z.string().optional(),
+});
+
+const EXPLAIN_SYSTEM_PROMPT = `You are a senior automation-platform engineer helping someone debug a failed
+node in a FlowForge (n8n/Make-style) workflow. You'll be given the node's type, its
+configured params, the error message it raised, and (optionally) the input it received.
+
+Respond with ONLY a JSON object (no markdown fences, no commentary) of the shape:
+{
+  "diagnosis": "one or two sentences on what most likely went wrong, in plain language",
+  "likelyCause": "config" | "credential" | "upstream-data" | "external-service" | "expression" | "other",
+  "suggestedFix": "a concrete, actionable next step — e.g. which param to change and to what, or which credential to check",
+  "confidence": "low" | "medium" | "high"
+}
+Be specific to the actual error message and params given — don't give generic troubleshooting advice.`;
+
+/**
+ * POST /ai/explain-failure — self-healing-retry building block (Phase 5).
+ * body: { nodeType, params?, error, input?, credentialId?, model? }
+ * Returns: { diagnosis: {...} }
+ *
+ * Takes a failed node's config + error (as already surfaced in Execution
+ * History's per-node Output panel) and asks the model to name the likely
+ * cause and a concrete fix, instead of leaving the person to decode a raw
+ * stack trace / API error string. Doesn't re-run anything itself — this is
+ * read-only triage; wiring an "Apply fix" action that edits the node's
+ * params automatically is a natural next step but out of scope here since
+ * it means writing to a live workflow graph unattended.
+ */
+aiRouter.post('/explain-failure', async (req: AuthedRequest, res) => {
+  const parsed = explainSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const { nodeType, params, error, input, credentialId, model } = parsed.data;
+
+  let apiKey = process.env.OPENAI_API_KEY;
+  if (credentialId) {
+    const cred = await getDecryptedCredential(credentialId, req.userId!);
+    if (!cred) return res.status(404).json({ error: 'Credential not found' });
+    apiKey = (cred as { apiKey?: string }).apiKey ?? apiKey;
+  }
+  if (!apiKey) {
+    return res.status(400).json({
+      error:
+        'No OpenAI API key available. Save an "openai" credential ({ "apiKey": "sk-..." }) and pass its id as credentialId, or set OPENAI_API_KEY on the API server.',
+    });
+  }
+
+  const userPrompt = JSON.stringify(
+    { nodeType, params: params ?? {}, error, input: input ?? null },
+    null,
+    2
+  );
+
+  try {
+    const response = await axios.post(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        model: model ?? 'gpt-4o-mini',
+        temperature: 0.2,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: EXPLAIN_SYSTEM_PROMPT },
+          { role: 'user', content: userPrompt },
+        ],
+      },
+      { headers: { Authorization: `Bearer ${apiKey}` }, timeout: 60000 }
+    );
+
+    const raw = response.data.choices?.[0]?.message?.content ?? '{}';
+    let diagnosis: unknown;
+    try {
+      diagnosis = JSON.parse(raw);
+    } catch {
+      return res.status(502).json({ error: 'AI response was not valid JSON', raw });
+    }
+
+    res.json({ diagnosis });
+  } catch (err: unknown) {
+    const message = axios.isAxiosError(err)
+      ? err.response?.data?.error?.message ?? err.message
+      : (err as Error).message;
+    res.status(502).json({ error: `AI explanation failed: ${message}` });
+  }
+});

@@ -25,14 +25,46 @@ import { dataTablesRouter } from './routes/dataTables';
 import { workflowTestsRouter } from './routes/workflowTests';
 import { tagsRouter } from './routes/tags';
 import { logStreamsRouter } from './routes/logStreams';
+import { queueAdminRouter } from './routes/queueAdmin';
+import { billingRouter, billingWebhookRouter } from './routes/billing';
+import { pool } from './db/pool';
+import { createRedisConnection } from './queue/queue';
 
 const app = express();
 app.use(cors());
+// Stripe webhook needs the raw, unparsed body for signature verification —
+// mounted ahead of the global express.json() below so it never gets parsed.
+app.use('/billing', billingWebhookRouter);
 app.use(express.json());
 
 app.get('/health', (_req, res) => {
   const sample: WorkflowGraph = { nodes: [], edges: [] };
   res.json({ status: 'ok', sample });
+});
+
+/**
+ * GET /ready — readiness probe (k8s-style), distinct from /health's plain
+ * liveness check. Actually verifies the API can reach its two hard
+ * dependencies (Postgres, Redis) rather than just confirming the Express
+ * process is up. Point a readiness probe at this so a load balancer/
+ * orchestrator stops routing traffic here during a DB/Redis outage instead
+ * of returning 500s to users.
+ */
+const readinessRedis = createRedisConnection();
+app.get('/ready', async (_req, res) => {
+  const checks: Record<string, 'ok' | 'error'> = { database: 'ok', redis: 'ok' };
+  try {
+    await pool.query('SELECT 1');
+  } catch {
+    checks.database = 'error';
+  }
+  try {
+    await readinessRedis.ping();
+  } catch {
+    checks.redis = 'error';
+  }
+  const healthy = Object.values(checks).every((v) => v === 'ok');
+  res.status(healthy ? 200 : 503).json({ status: healthy ? 'ready' : 'not ready', checks });
 });
 
 app.use('/auth', authRouter);
@@ -58,6 +90,8 @@ app.use('/templates', templatesRouter);
 app.use('/variables', variablesRouter);
 app.use('/data-tables', dataTablesRouter);
 app.use('/tags', tagsRouter);
+app.use('/queue', queueAdminRouter);
+app.use('/billing', billingRouter);
 
 const httpServer = createServer(app);
 initRealtime(httpServer);

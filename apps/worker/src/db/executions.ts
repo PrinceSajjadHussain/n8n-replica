@@ -1,6 +1,7 @@
 import { pool } from './pool';
 import { randomUUID } from 'crypto';
 import { decrypt } from './crypto';
+import { redactForPersistence } from '../utils/redact';
 
 export interface WorkflowRow {
   id: string;
@@ -89,7 +90,7 @@ export async function upsertNodeRunStart(
   await pool.query(
     `INSERT INTO "ExecutionNodeRun" (id, "executionId", "nodeId", status, input, "startedAt")
      VALUES ($1, $2, $3, 'running', $4, now())`,
-    [id, executionId, nodeId, JSON.stringify(input ?? null)]
+    [id, executionId, nodeId, JSON.stringify(redactForPersistence(input) ?? null)]
   );
   return id;
 }
@@ -97,7 +98,7 @@ export async function upsertNodeRunStart(
 export async function finishNodeRunSuccess(nodeRunId: string, output: unknown): Promise<void> {
   await pool.query(
     `UPDATE "ExecutionNodeRun" SET status = 'success', output = $1, "finishedAt" = now() WHERE id = $2`,
-    [JSON.stringify(output ?? null), nodeRunId]
+    [JSON.stringify(redactForPersistence(output) ?? null), nodeRunId]
   );
 }
 

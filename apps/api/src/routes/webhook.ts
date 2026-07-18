@@ -5,6 +5,7 @@ import { pool } from '../db/pool';
 import { createExecutionQueue, createRedisConnection } from '../queue/queue';
 import type { ExecutionJobData } from '@flowforge/shared-types';
 import { randomUUID } from 'crypto';
+import { incrementUsage } from '../db/billing';
 
 const redisConnection = createRedisConnection();
 const executionQueue = createExecutionQueue(redisConnection);
@@ -119,7 +120,7 @@ webhookRouter.post('/:workflowId/:path', async (req, res) => {
   const { workflowId, path } = req.params;
 
   const wfResult = await pool.query(
-    `SELECT id, "userId", "isActive", "nodesJson" FROM "Workflow" WHERE id = $1`,
+    `SELECT id, "userId", "workspaceId", "isActive", "nodesJson" FROM "Workflow" WHERE id = $1`,
     [workflowId]
   );
   const workflow = wfResult.rows[0];
@@ -148,6 +149,7 @@ webhookRouter.post('/:workflowId/:path', async (req, res) => {
 
   if (responseMode !== 'lastNode' && responseMode !== 'responseNode') {
     const job = await executionQueue.add('execute', jobData);
+    if (workflow.workspaceId) incrementUsage(workflow.workspaceId).catch(() => {});
     return res.status(202).json({ message: 'Webhook received, execution enqueued', jobId: job.id });
   }
 
@@ -155,6 +157,7 @@ webhookRouter.post('/:workflowId/:path', async (req, res) => {
   // publish) before we start listening.
   const waiter = waitForWebhookResponse(executionId, responseMode, DEFAULT_WEBHOOK_TIMEOUT_MS);
   await executionQueue.add('execute', jobData);
+  if (workflow.workspaceId) incrementUsage(workflow.workspaceId).catch(() => {});
   const response = await waiter;
   if (response.headers) {
     for (const [key, value] of Object.entries(response.headers)) res.setHeader(key, value);

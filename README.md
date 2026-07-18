@@ -1338,3 +1338,93 @@ before this phase) and confirmed harmless, not introduced by this pass's edits. 
 `npm install`/`tsc -b`/`vite build` limitation as every prior phase — this sandbox has no
 reliable network access to install dependencies, so none of this has been through a live
 typecheck or build; run one before deploying.
+
+## Roadmap execution log — Phases 1, 2, 3, 4, 5
+
+A later pass audited this repo against n8n/Make.com feature parity and worked through a
+five-phase roadmap. Everything below is real, shipped code — not a plan — but (same
+caveat as the section above) none of it has been through a live `npm install`/build in
+this sandbox; only isolated `tsc` parsing on each changed file, filtered for
+dependency-resolution noise. Run a real build before deploying.
+
+**Phase 1 — execution engine hardening**
+
+- **Per-workflow concurrency limits** — `Workflow.maxConcurrency` (migration
+  `00000000000011_concurrency_retention`, nullable int, `null` = unlimited). Enforced in
+  `apps/worker/src/engine/concurrency.ts`: a Redis-backed atomic slot semaphore (Lua
+  script, so it's race-free across multiple worker instances) gates
+  `apps/worker/src/index.ts`'s main job processor. A workflow at its cap doesn't fail or
+  busy-loop — the job is deferred via BullMQ's `moveToDelayed`/`DelayedError` and retried
+  after `CONCURRENCY_RETRY_DELAY_MS` (default 3000ms). Slots release in a `finally` block
+  with a 1h TTL safety net in case a worker crashes mid-execution. Editable from the
+  canvas: **Versions, Comments & Settings → Settings** tab (`CollabPanel.tsx`), same panel
+  that already had the Error Workflow picker.
+- **Execution-history retention/pruning** — `apps/worker/src/utils/retention.ts`. Off by
+  default (`EXECUTION_RETENTION_DAYS=0` keeps everything, matching prior behavior); set to
+  e.g. `90` to batch-delete finished (`success`/`failed`, never `running`/`paused`)
+  `Execution` rows older than that on an hourly sweep. Added an index on
+  `Execution.startedAt` so the sweep's `WHERE` clause is cheap.
+
+**Phase 2 — integration completeness**
+
+- **First-party Anthropic (Claude) node** — `apps/worker/src/nodes/anthropicNode.ts`, a
+  real call to the Messages API mirroring `openaiNode.ts`'s param/credential shape so the
+  two are interchangeable. Wired end-to-end: `NodeType` union in `shared-types`, node
+  registry, palette entry, `anthropic` credential type + form field, and config-panel
+  param schema — not just callable from the Code node.
+
+**Phase 3 — enterprise/security**
+
+- **Secret redaction before persistence** — `apps/worker/src/utils/redact.ts`, a
+  key-name-based heuristic (matches `api[_-]?key`, `authorization`, `secret`, `password`,
+  `token`, `credential`, `cookie`, etc.) applied in `apps/worker/src/db/executions.ts`
+  before any node input/output is written to `ExecutionNodeRun`. Previously raw JSON —
+  including anything that looked like a credential echoed back by an API response — was
+  stored and shown verbatim in Execution History forever; now it's masked at the single
+  choke point every node run funnels through, so it can't be bypassed by a node that
+  doesn't opt in.
+
+**Phase 4 — observability & ops**
+
+- **Real readiness probe** — `GET /ready` (`apps/api/src/index.ts`) actually pings
+  Postgres and Redis and returns 503 if either is down, distinct from the pre-existing
+  `/health` liveness stub. Point a k8s/load-balancer readiness check here.
+- **Dead-letter queue visibility + manual replay** —
+  `apps/api/src/routes/queueAdmin.ts` (`GET /queue/failed`,
+  `POST /queue/failed/:jobId/retry`) surfaces BullMQ jobs that exhausted their retry
+  attempts (previously invisible outside a raw Redis CLI session), paired with a new
+  `/admin/queue` page (`FailedJobsPage.tsx`) following the existing `/admin/audit-log`
+  page's pattern. Not yet linked from the sidebar nav — same "reachable by direct URL
+  only" state as the other `/admin/*` pages.
+
+**Phase 5 — a differentiator neither n8n nor Make ships well**
+
+- **AI-assisted failure explanation** — `POST /ai/explain-failure`
+  (`apps/api/src/routes/ai.ts`) takes a failed node's type/params/error/input and asks the
+  model for a structured diagnosis (`likelyCause`, `suggestedFix`, `confidence`) instead
+  of leaving a raw error string to decode. Wired into `ExecutionHistoryPage.tsx` as an "✨
+  Explain failure" button on every failed node, which fetches the workflow's current node
+  types/params once so the diagnosis has real context. Deliberately read-only/advisory —
+  it doesn't auto-edit the live workflow graph.
+- Correction to the original gap analysis: `POST /ai/generate-workflow` (describe a
+  workflow in plain English, get a draft graph back) turned out to **already exist** —
+  removed from the roadmap as a false gap rather than re-implemented.
+
+### New environment variables
+
+```
+CONCURRENCY_RETRY_DELAY_MS=3000       # how long a job waits before retrying a lost concurrency-slot race
+EXECUTION_RETENTION_DAYS=0            # 0/unset = keep all execution history forever (opt-in retention)
+EXECUTION_RETENTION_SWEEP_INTERVAL_MS=3600000
+ANTHROPIC_API_KEY=                    # fallback if a node has no "anthropic" credential selected
+```
+
+### Not done in this pass
+
+- Binary-data storage backend (S3-compatible) — still base64-in-Postgres only, the
+  `directRef` field on `BinaryData` exists in the type but has no implementation.
+- No dedicated "instance admin" role — `/admin/queue` and friends are reachable by any
+  authenticated user, gated the same as the rest of the API.
+- Cost tracking / token-spend dashboards for AI nodes were scoped out of Phase 4/5 for
+  time; `anthropic`/`openai` node output already includes `usage`, so a cost rollup is a
+  natural follow-up against data that's already there.

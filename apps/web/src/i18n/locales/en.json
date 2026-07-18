@@ -1,0 +1,53 @@
+{
+  "nav": {
+    "workflows": "Workflows",
+    "workspaces": "Workspaces",
+    "credentials": "Credentials",
+    "variables": "Variables",
+    "dataTables": "Data Tables",
+    "templates": "Templates",
+    "marketplace": "Marketplace",
+    "billing": "Billing",
+    "search": "Search…",
+    "signOut": "Sign out",
+    "theme": "Theme",
+    "language": "Language"
+  },
+  "workflows": {
+    "title": "Workflows",
+    "new": "+ New workflow",
+    "loading": "Loading…",
+    "emptyTitle": "No workflows yet",
+    "emptyTagTitle": "No workflows with this tag",
+    "emptyDescription": "Workflows are how you automate anything in FlowForge — connect a trigger to a chain of actions and let it run itself.",
+    "emptyTagDescription": "Try a different tag, or clear the filter to see every workflow.",
+    "browseTemplates": "Browse templates",
+    "active": "Active",
+    "inactive": "Inactive",
+    "updated": "Updated {{date}}",
+    "emptyFolder": "No workflows in this folder yet — drag one here from another folder."
+  },
+  "folders": {
+    "title": "Folders",
+    "new": "+ New",
+    "allWorkflows": "All workflows",
+    "newSubfolder": "+ Subfolder",
+    "rename": "Rename",
+    "delete": "Delete",
+    "empty": "No folders yet — create one to organize workflows."
+  },
+  "billing": {
+    "title": "Billing & usage",
+    "currentPlan": "Current plan",
+    "usageThisPeriod": "Usage this period",
+    "executions": "Executions",
+    "manage": "Manage subscription",
+    "upgrade": "Upgrade",
+    "choosePlan": "Choose a plan"
+  },
+  "common": {
+    "cancel": "Cancel",
+    "save": "Save",
+    "confirm": "Confirm"
+  }
+}

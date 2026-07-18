@@ -18,6 +18,7 @@ export const CREDENTIAL_TYPES = [
   'email',
   'googleSheets',
   'openai',
+  'anthropic',
 ] as const;
 
 export type CredentialType = (typeof CREDENTIAL_TYPES)[number];
@@ -46,6 +47,7 @@ export const CREDENTIAL_TYPE_META: Record<CredentialType, { label: string; color
   email: { label: 'Email', color: '#EA4335', letter: 'E' },
   googleSheets: { label: 'Google Sheets', color: '#0F9D58', letter: 'G' },
   openai: { label: 'OpenAI', color: '#10A37F', letter: 'AI' },
+  anthropic: { label: 'Anthropic', color: '#D97757', letter: 'A' },
 };
 
 export const CREDENTIAL_FIELDS: Record<CredentialType, CredentialField[]> = {
@@ -170,6 +172,16 @@ export const CREDENTIAL_FIELDS: Record<CredentialType, CredentialField[]> = {
       helpText: 'From platform.openai.com/api-keys.',
     },
   ],
+  anthropic: [
+    {
+      key: 'apiKey',
+      label: 'API key',
+      fieldType: 'password',
+      required: true,
+      placeholder: 'sk-ant-...',
+      helpText: 'From console.anthropic.com/settings/keys.',
+    },
+  ],
 };
 
 export function defaultFieldValues(type: CredentialType): Record<string, string> {
@@ -197,6 +209,7 @@ export const NODE_TYPE_TO_CREDENTIAL_TYPE: Record<string, CredentialType> = {
   email: 'email',
   googleSheets: 'googleSheets',
   openai: 'openai',
+  anthropic: 'anthropic',
   ragIngest: 'openai',
   ragQuery: 'openai',
   agent: 'openai',

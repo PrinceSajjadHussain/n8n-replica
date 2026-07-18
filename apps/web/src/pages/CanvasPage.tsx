@@ -30,6 +30,8 @@ import { NodeDensityContext, CredentialNamesContext, NODE_DENSITY_OPTIONS, type 
 import { isScheduleCronValid } from '../components/Paramform';
 import CollabPanel from '../components/CollabPanel';
 import ConfirmDialog from '../components/ConfirmDialog';
+import { useIsMobile } from '../lib/useMediaQuery';
+import MobileExecutionMonitorPage from './MobileExecutionMonitorPage';
 
 const nodeTypes = { flowNode: FlowNode, stickyNote: StickyNoteNode, group: GroupNode };
 let idCounter = 0;
@@ -39,6 +41,15 @@ function nextId() {
 }
 
 export default function CanvasPage() {
+  // Below the `sm` breakpoint, hand off to the read-only mobile monitor —
+  // the drag/connect/resize interactions here assume a mouse and a wide
+  // canvas, neither of which a phone viewport can offer usefully.
+  const isMobile = useIsMobile();
+  if (isMobile) return <MobileExecutionMonitorPage />;
+  return <CanvasPageDesktop />;
+}
+
+function CanvasPageDesktop() {
   const { id: workflowId } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const accessToken = useAuthStore((s) => s.accessToken);

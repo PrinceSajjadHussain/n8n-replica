@@ -69,6 +69,7 @@ export const NODE_TYPES: NodeTypeMeta[] = [
   { type: 'httpRequest', label: 'HTTP Request', category: 'Integration', icon: '🌐', iconKey: 'lucide:Globe', color: '#6B7280' },
 
   { type: 'openai', label: 'OpenAI', category: 'AI', icon: '✨', iconKey: 'si:siOpenai', color: '#10A37F' },
+  { type: 'anthropic', label: 'Anthropic (Claude)', category: 'AI', icon: '✨', iconKey: 'si:siAnthropic', color: '#D97757' },
   { type: 'ragIngest', label: 'RAG: Ingest', category: 'AI', icon: '📥', iconKey: 'lucide:FileInput', color: '#10A37F' },
   { type: 'ragQuery', label: 'RAG: Query', category: 'AI', icon: '🔎', iconKey: 'lucide:Search', color: '#10A37F' },
   { type: 'agent', label: 'AI Agent', category: 'AI', icon: '🤖', iconKey: 'lucide:Bot', color: '#10A37F' },
