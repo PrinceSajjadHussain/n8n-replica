@@ -80,6 +80,58 @@ export async function testCredentialConnection(
       }
       case 'email':
         return { ok: true, message: 'Email credential stored. (No live check available — send a test workflow to verify.)' };
+      case 'discord': {
+        const webhookUrl = data.webhookUrl as string | undefined;
+        if (!webhookUrl) return { ok: false, message: 'No webhook URL stored.' };
+        const valid = /^https:\/\/discord\.com\/api\/webhooks\//.test(webhookUrl);
+        if (!valid) return { ok: false, message: 'That does not look like a Discord webhook URL.' };
+        const res = await fetch(webhookUrl);
+        return res.ok
+          ? { ok: true, message: 'Discord webhook exists and is reachable.' }
+          : { ok: false, message: `Discord rejected the webhook (${res.status}).` };
+      }
+      case 'telegram': {
+        const botToken = data.botToken as string | undefined;
+        if (!botToken) return { ok: false, message: 'No bot token stored.' };
+        const res = await fetch(`https://api.telegram.org/bot${botToken}/getMe`);
+        const json = (await res.json()) as { ok: boolean; result?: { username?: string }; description?: string };
+        return json.ok
+          ? { ok: true, message: `Connected as @${json.result?.username ?? 'bot'}.` }
+          : { ok: false, message: json.description ?? 'Telegram rejected the bot token.' };
+      }
+      case 'notion': {
+        const apiKey = data.apiKey as string | undefined;
+        if (!apiKey) return { ok: false, message: 'No API key stored.' };
+        const res = await fetch('https://api.notion.com/v1/users/me', {
+          headers: { Authorization: `Bearer ${apiKey}`, 'Notion-Version': '2022-06-28' },
+        });
+        return res.ok
+          ? { ok: true, message: 'Notion integration secret is valid.' }
+          : { ok: false, message: `Notion rejected the secret (${res.status}).` };
+      }
+      case 'github': {
+        const token = data.token as string | undefined;
+        if (!token) return { ok: false, message: 'No token stored.' };
+        const res = await fetch('https://api.github.com/user', {
+          headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+        });
+        if (!res.ok) return { ok: false, message: `GitHub rejected the token (${res.status}).` };
+        const json = (await res.json()) as { login?: string };
+        return { ok: true, message: `Connected to GitHub as ${json.login ?? 'unknown user'}.` };
+      }
+      case 'postgres': {
+        const connectionString = data.connectionString as string | undefined;
+        if (!connectionString) return { ok: false, message: 'No connection string stored.' };
+        const { Client } = await import('pg');
+        const client = new Client({ connectionString, connectionTimeoutMillis: 5000 });
+        try {
+          await client.connect();
+          await client.query('SELECT 1');
+          return { ok: true, message: 'Connected to Postgres successfully.' };
+        } finally {
+          await client.end().catch(() => {});
+        }
+      }
       default:
         return { ok: true, message: 'No automated test is defined for this credential type yet.' };
     }

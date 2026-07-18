@@ -111,6 +111,20 @@ marketplaceRouter.post('/install', async (req: AuthedRequest, res, next) => {
   }
 });
 
+/** GET /marketplace/latest/:name — check the latest published npm version, without installing. Powers the "update available" badge. */
+marketplaceRouter.get('/latest/:name', async (req, res, next) => {
+  try {
+    const metaResponse = await axios.get(`https://registry.npmjs.org/${encodeURIComponent(req.params.name)}/latest`, {
+      timeout: 15000,
+    });
+    const meta = metaResponse.data as { name: string; version: string };
+    res.json({ name: meta.name, latestVersion: meta.version });
+  } catch (err: any) {
+    if (err?.response?.status === 404) return res.status(404).json({ error: 'Package not found on npm' });
+    next(err);
+  }
+});
+
 /** DELETE /marketplace/:name — uninstall a community node package. */
 marketplaceRouter.delete('/:name', async (req, res, next) => {
   try {

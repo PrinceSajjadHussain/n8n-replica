@@ -74,6 +74,7 @@ export type NodeType =
   | 'forEachBranch'
   | 'waitForWebhook'
   | 'humanApproval'
+  | 'respondToWebhook'
   | 'stripe'
   | 'twilio'
   | 'whatsapp'
@@ -90,6 +91,10 @@ export type NodeType =
   | 'agentMemory'
   | 'agent'
   | 'agentOrchestrator'
+  | 'dataTableRead'
+  | 'dataTableWrite'
+  | 'fileExtract'
+  | 'fileConvert'
   // Community/marketplace nodes register under a namespaced type so they
   // can never collide with a built-in — see communityLoader.ts.
   | `community.${string}`;
@@ -155,7 +160,7 @@ export interface ExecutionJobData {
   executionId: string;
   workflowId: string;
   userId: string;
-  triggerType: 'manual' | 'webhook' | 'schedule' | 'emailTrigger' | 'fileWatcher' | 'databaseChange' | 'streamTrigger';
+  triggerType: 'manual' | 'webhook' | 'schedule' | 'emailTrigger' | 'fileWatcher' | 'databaseChange' | 'streamTrigger' | 'test';
   triggerPayload?: unknown;
 }
 
@@ -178,6 +183,11 @@ export interface NodeStatusEvent {
   status: NodeRunStatus;
   output?: unknown;
   error?: string;
+  /** Binary attachment metadata (mimeType/fileName/fileSize), plus inline
+   *  base64 `preview` for small image/PDF attachments only — populated by
+   *  the executor so the canvas can render a thumbnail without shipping
+   *  every attachment's full bytes over the socket. */
+  binary?: unknown;
 }
 
 export interface ExecutionStatusEvent {

@@ -20,6 +20,12 @@ import type { NodeItems } from '@flowforge/shared-types';
  *
  * params: { code: string }
  *
+ * Also bridges n8n-style `$getWorkflowStaticData()` / `$setWorkflowStaticData(data)`
+ * helpers into the isolate for lightweight persisted state (e.g. "last
+ * processed id") between runs — see docs/data-model-upgrade.md. The setter
+ * only records the replacement value inside the isolate; the actual
+ * Postgres write happens once, after the script finishes running.
+ *
  * Security properties:
  * - Separate V8 isolate with its own heap (memory-limited).
  * - No access to Node.js globals (require, process, fs, network, etc.)
@@ -28,7 +34,7 @@ import type { NodeItems } from '@flowforge/shared-types';
  */
 export const codeNode: NodePlugin = {
   type: 'code',
-  async execute({ input, items, params }) {
+  async execute({ input, items, params, staticData, setStaticData }) {
     const userCode = String(params.code ?? '');
     if (!userCode.trim()) throw new Error('code node: "code" param is required');
 
@@ -43,11 +49,36 @@ export const codeNode: NodePlugin = {
       // boundary.
       const inputJson = JSON.stringify(input ?? null);
       const itemsJson = JSON.stringify(items ?? []);
+      const staticDataJson = JSON.stringify(staticData ?? {});
+
+      // $setWorkflowStaticData(data) is bridged as a synchronous native
+      // callback: the isolate can't hold a live reference to the outer
+      // Postgres write, so the call just records the replacement value in
+      // this closure; the actual persist happens once, after the script
+      // finishes, so a script that calls it mid-loop doesn't hammer the DB.
+      let pendingStaticData: Record<string, unknown> | null = null;
+      await jail.set(
+        '__setStaticData',
+        new ivm.Reference((dataJson: string) => {
+          try {
+            pendingStaticData = JSON.parse(dataJson);
+          } catch {
+            // ignore malformed payloads — the workflow's static data is simply left unchanged
+          }
+        })
+      );
 
       const wrapped = `
         (function() {
           const input = JSON.parse(${JSON.stringify(inputJson)});
           const items = JSON.parse(${JSON.stringify(itemsJson)});
+          const __staticData = JSON.parse(${JSON.stringify(staticDataJson)});
+          // n8n-style helpers: read the current snapshot, or replace it
+          // wholesale (merge yourself first if you only want to change one key).
+          const $getWorkflowStaticData = function() { return __staticData; };
+          const $setWorkflowStaticData = function(data) {
+            __setStaticData.applySync(undefined, [JSON.stringify(data)]);
+          };
           const __userFn = function(input, items) {
             ${userCode}
           };
@@ -59,6 +90,8 @@ export const codeNode: NodePlugin = {
       const script = await isolate.compileScript(wrapped);
       const resultJson = await script.run(context, { timeout: 5000 });
       const result = JSON.parse(resultJson);
+
+      if (pendingStaticData) await setStaticData(pendingStaticData);
 
       // If the script returned something already shaped like items
       // (array of { json, binary? }), pass it through as-is; otherwise

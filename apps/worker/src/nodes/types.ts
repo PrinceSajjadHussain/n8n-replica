@@ -60,6 +60,14 @@ export interface NodeExecutionContext {
   getBinary(item: NodeItem, key?: string): Buffer | null;
   /** Builds a BinaryData object from raw bytes — base64-encodes and fills in fileSize. */
   toBinary(buffer: Buffer, mimeType: string, fileName?: string): BinaryData;
+  /** The workflow this node is running as part of — for nodes that need to scope data (Data Table, static data) to it. */
+  workflowId: string;
+  /** The workflow's workspace, if any — Data Table lookups are scoped to this. */
+  workspaceId: string | null;
+  /** Snapshot of this workflow's persisted static-data blob (`$getWorkflowStaticData()` equivalent), taken once at the start of the run. */
+  staticData: Record<string, unknown>;
+  /** Persists a full replacement of the workflow's static-data blob (`$setWorkflowStaticData()` equivalent). Takes effect immediately, not just for this run. */
+  setStaticData(data: Record<string, unknown>): Promise<void>;
 }
 
 export interface NodeExecutionResult {

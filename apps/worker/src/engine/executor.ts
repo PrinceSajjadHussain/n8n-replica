@@ -10,7 +10,7 @@ import type {
 import { resolveExpressions } from './expressions';
 import { NODE_REGISTRY } from '../nodes';
 import { normalizeToItems, itemsToLegacyValue, decodeBinary, makeBinary } from '../nodes/types';
-import { dispatchExecutionAlerts } from '../utils/alerts';
+import { dispatchExecutionAlerts, dispatchLogStreamEvent } from '../utils/alerts';
 
 /** Strips raw base64 `data` off binary metadata before it goes into expression
  *  context / logs — keeps `{{$binary.data.mimeType}}` etc. usable without
@@ -30,6 +30,41 @@ function itemsToBinarySummary(items: NodeItems): unknown {
   if (items.length === 1) return stripBinaryData(items[0].binary);
   return items.map((i) => stripBinaryData(i.binary));
 }
+
+/** Cap on inline preview bytes sent over the socket — big enough for a
+ *  thumbnail-sized image or a first-page PDF glance, small enough not to
+ *  bloat every execution event. */
+const BINARY_PREVIEW_MAX_BYTES = 512 * 1024;
+
+/** Metadata + inline base64 `preview` for previewable (image/PDF) binary on
+ *  one item, capped to `BINARY_PREVIEW_MAX_BYTES`. Non-previewable types
+ *  (csv/json/etc.) get metadata only — the web UI falls back to a generic
+ *  file chip for those. */
+function binaryToPreview(binary: BinaryCollection | undefined): Record<string, unknown> | undefined {
+  if (!binary) return undefined;
+  const out: Record<string, unknown> = {};
+  for (const [key, b] of Object.entries(binary)) {
+    const isPreviewable = b.mimeType.startsWith('image/') || b.mimeType === 'application/pdf';
+    const withinCap = (b.fileSize ?? 0) <= BINARY_PREVIEW_MAX_BYTES;
+    out[key] = {
+      mimeType: b.mimeType,
+      fileName: b.fileName,
+      fileExtension: b.fileExtension,
+      fileSize: b.fileSize,
+      preview: isPreviewable && withinCap ? b.data : undefined,
+    };
+  }
+  return out;
+}
+
+/** Binary preview for a full items array — only the first item's binary is
+ *  previewed (matches how `output` itself collapses to a single value for
+ *  the inspector when there's one item, and avoids sending N previews for
+ *  an N-item batch). */
+function itemsToBinaryPreview(items: NodeItems): unknown {
+  if (!items || items.length === 0) return undefined;
+  return binaryToPreview(items[0].binary);
+}
 import {
   createExecution,
   finishExecution,
@@ -43,19 +78,49 @@ import {
   getDecryptedCredentialById,
   getWorkflow,
   getExecutionForRetry,
+  getVariablesMapForWorkflow,
+  getWorkflowStaticData,
+  setWorkflowStaticData,
 } from '../db/executions';
 
 export type StatusEmitter = (event: {
   executionId: string;
   nodeId?: string;
-  status: 'running' | 'success' | 'failed' | 'skipped' | 'started' | 'completed' | 'paused';
+  status: 'running' | 'success' | 'failed' | 'skipped' | 'started' | 'completed' | 'paused' | 'webhook-response';
   output?: unknown;
+  input?: unknown;
   error?: string;
+  /** Wall-clock ms the node spent running; attached on success/failed. */
+  durationMs?: number;
+  /** Item count of the node's output items array, when known. */
+  itemCount?: number;
 }) => void;
 
 type NodeStatus = 'success' | 'failed' | 'skipped';
 const PAUSE_NODE_TYPES = new Set(['waitForWebhook', 'humanApproval']);
 const MAX_SUBWORKFLOW_DEPTH = 5;
+
+/**
+ * Canvas-only annotation node types — sticky notes and group containers.
+ * These are pure UI/documentation elements (see StickyNoteNode.tsx /
+ * GroupNode.tsx) that get saved in the same `nodesJson` array as real
+ * workflow nodes so their position/size/text round-trips through the
+ * normal save/load path, but they must never reach the execution engine:
+ * they have no registered NodePlugin, aren't wired into the graph via real
+ * edges, and would otherwise be picked up as a same-level root node and
+ * fail with "No node plugin registered". Stripped out up front, before
+ * computeLevels runs, so they're invisible to execution regardless of
+ * what the frontend happens to send.
+ */
+const NON_EXECUTABLE_NODE_TYPES = new Set(['stickyNote', 'group']);
+
+function stripAnnotationNodes(nodes: WorkflowNode[], edges: WorkflowEdge[]): { nodes: WorkflowNode[]; edges: WorkflowEdge[] } {
+  const executableNodes = nodes.filter((n) => !NON_EXECUTABLE_NODE_TYPES.has(n.type));
+  if (executableNodes.length === nodes.length) return { nodes, edges };
+  const executableIds = new Set(executableNodes.map((n) => n.id));
+  const executableEdges = edges.filter((e) => executableIds.has(e.source) && executableIds.has(e.target));
+  return { nodes: executableNodes, edges: executableEdges };
+}
 
 /**
  * Groups nodes into dependency "levels" (waves): level 0 has no
@@ -118,6 +183,7 @@ interface RunState {
 interface RunOptions {
   executionId: string;
   workflowId: string;
+  workspaceId: string | null;
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
   triggerPayload: unknown;
@@ -126,10 +192,13 @@ interface RunOptions {
   persist: boolean; // false for forEachBranch sub-runs: no DB node-run rows, lighter weight
   nodeIdPrefix: string; // for emit() visibility when running as a nested subgraph
   depth: number;
+  vars: Record<string, string>; // Variables store ($vars.NAME), resolved once per top-level run
+  staticData: Record<string, unknown>; // workflow static-data blob ($staticData.KEY / $getWorkflowStaticData()), snapshotted once per top-level run
 }
 
 async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'failed' | 'paused' }> {
-  const { executionId, workflowId, nodes, edges, triggerPayload, emit, state, persist, nodeIdPrefix, depth } = opts;
+  const { executionId, workflowId, workspaceId, triggerPayload, emit, state, persist, nodeIdPrefix, depth, vars, staticData } = opts;
+  const { nodes, edges } = stripAnnotationNodes(opts.nodes, opts.edges);
   const { outputs, nodeStatus, branchTaken } = state;
   const nodeMap = new Map<string, WorkflowNode>(nodes.map((n) => [n.id, n]));
   const incomingEdges = new Map<string, WorkflowEdge[]>();
@@ -230,7 +299,15 @@ async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'faile
     const input = items.length === 0 ? null : itemsToLegacyValue(items);
 
     const nodeRunId = persist ? await upsertNodeRunStart(executionId, nodeId, input) : null;
-    emit({ executionId, nodeId: nodeIdPrefix + nodeId, status: 'running' });
+    const startedAt = Date.now();
+    emit({
+      executionId,
+      nodeId: nodeIdPrefix + nodeId,
+      status: 'running',
+      input,
+      itemCount: items.length,
+      binary: itemsToBinaryPreview(items),
+    });
 
     if (node.isPinned) {
       // Pin Data: skip the real plugin call (and any credential/side
@@ -239,7 +316,15 @@ async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'faile
       outputs.set(nodeId, pinnedItems);
       nodeStatus.set(nodeId, 'success');
       if (persist && nodeRunId) await finishNodeRunSuccess(nodeRunId, node.pinnedOutput);
-      emit({ executionId, nodeId: nodeIdPrefix + nodeId, status: 'success', output: node.pinnedOutput });
+      emit({
+        executionId,
+        nodeId: nodeIdPrefix + nodeId,
+        status: 'success',
+        output: node.pinnedOutput,
+        durationMs: Date.now() - startedAt,
+        itemCount: pinnedItems.length,
+        binary: itemsToBinaryPreview(pinnedItems),
+      });
       return;
     }
 
@@ -261,6 +346,8 @@ async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'faile
         execution: { id: executionId },
         nodesByLabel,
         binary: itemsToBinarySummary(items),
+        vars,
+        staticData,
       };
       const resolvedParams = resolveExpressions(node.params ?? {}, exprCtx);
 
@@ -294,7 +381,14 @@ async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'faile
           outputs.set(nodeId, normalizeToItems(softOutput, nodeId));
           nodeStatus.set(nodeId, 'success');
           if (persist && nodeRunId) await finishNodeRunSuccess(nodeRunId, softOutput);
-          emit({ executionId, nodeId: nodeIdPrefix + nodeId, status: 'success', output: softOutput });
+          emit({
+            executionId,
+            nodeId: nodeIdPrefix + nodeId,
+            status: 'success',
+            output: softOutput,
+            durationMs: Date.now() - startedAt,
+            itemCount: 1,
+          });
         } else {
           throw lastError;
         }
@@ -305,13 +399,27 @@ async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'faile
         nodeStatus.set(nodeId, 'success');
         const legacyOutput = result.items ? itemsToLegacyValue(resultItems) : result.output;
         if (persist && nodeRunId) await finishNodeRunSuccess(nodeRunId, legacyOutput);
-        emit({ executionId, nodeId: nodeIdPrefix + nodeId, status: 'success', output: legacyOutput });
+        emit({
+          executionId,
+          nodeId: nodeIdPrefix + nodeId,
+          status: 'success',
+          output: legacyOutput,
+          durationMs: Date.now() - startedAt,
+          itemCount: resultItems.length,
+          binary: itemsToBinaryPreview(resultItems),
+        });
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       nodeStatus.set(nodeId, 'failed');
       if (persist && nodeRunId) await finishNodeRunFailure(nodeRunId, message);
-      emit({ executionId, nodeId: nodeIdPrefix + nodeId, status: 'failed', error: message });
+      emit({
+        executionId,
+        nodeId: nodeIdPrefix + nodeId,
+        status: 'failed',
+        error: message,
+        durationMs: Date.now() - startedAt,
+      });
     }
   }
 
@@ -324,7 +432,12 @@ async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'faile
     depth: number
   ): Promise<{ output?: unknown; items?: NodeItems; branch?: string }> {
     if (node.type === 'subWorkflow') return runSubWorkflow(params, input, emit, depth);
-    if (node.type === 'forEachBranch') return runForEachBranch(node, params, input, emit, executionId, workflowId, depth);
+    if (node.type === 'forEachBranch') {
+      return runForEachBranch(node, params, input, emit, executionId, workflowId, workspaceId, depth, vars, staticData);
+    }
+    if (node.type === 'respondToWebhook') {
+      return runRespondToWebhook(params, input, items, emit, executionId, nodeIdPrefix, node.id);
+    }
     const plugin = NODE_REGISTRY[node.type];
     if (!plugin) throw new Error(`No node plugin registered for type "${node.type}"`);
     return plugin.execute({
@@ -334,6 +447,10 @@ async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'faile
       credential,
       getBinary: (item, key) => decodeBinary(item, key),
       toBinary: (buffer, mimeType, fileName) => makeBinary(buffer, mimeType, fileName),
+      workflowId,
+      workspaceId,
+      staticData,
+      setStaticData: (data) => setWorkflowStaticData(workflowId, data),
     });
   }
 }
@@ -346,6 +463,46 @@ async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'faile
  * A-calls-B-calls-A infinite recursion.
  * params: { workflowId: string }
  */
+/**
+ * respondToWebhook — the n8n-style "Respond to Webhook" node. Only
+ * meaningful when the triggering webhook node's `responseMode` param is
+ * `'responseNode'` (see apps/api/src/routes/webhook.ts, which subscribes to
+ * this node's `webhook-response` status event and uses it to answer the
+ * still-open HTTP request). Fires immediately when this node runs — it
+ * does NOT wait for the rest of the workflow — then passes its input
+ * through unchanged so any downstream nodes still see the same data.
+ *
+ * params:
+ *   statusCode?: number                    default 200
+ *   responseBody?: unknown                 default: this node's input data
+ *   responseHeaders?: Record<string, string>
+ */
+async function runRespondToWebhook(
+  params: Record<string, unknown>,
+  input: unknown,
+  items: NodeItems,
+  emit: StatusEmitter,
+  executionId: string,
+  nodeIdPrefix: string,
+  nodeId: string
+): Promise<{ output: unknown }> {
+  const statusCode = typeof params.statusCode === 'number' ? params.statusCode : 200;
+  const responseHeaders =
+    params.responseHeaders && typeof params.responseHeaders === 'object'
+      ? (params.responseHeaders as Record<string, string>)
+      : undefined;
+  const body = 'responseBody' in params ? params.responseBody : (input ?? {});
+
+  emit({
+    executionId,
+    nodeId: nodeIdPrefix + nodeId,
+    status: 'webhook-response',
+    output: { statusCode, headers: responseHeaders, body },
+  });
+
+  return { output: input ?? {} };
+}
+
 async function runSubWorkflow(
   params: Record<string, unknown>,
   input: unknown,
@@ -391,7 +548,10 @@ async function runForEachBranch(
   emit: StatusEmitter,
   executionId: string,
   workflowId: string,
-  depth: number
+  workspaceId: string | null,
+  depth: number,
+  vars: Record<string, string>,
+  staticData: Record<string, unknown>
 ): Promise<{ output: unknown }> {
   if (depth >= MAX_SUBWORKFLOW_DEPTH) {
     throw new Error(`forEachBranch: max nesting depth (${MAX_SUBWORKFLOW_DEPTH}) exceeded`);
@@ -406,13 +566,15 @@ async function runForEachBranch(
     ? itemsPath.split('.').reduce<unknown>((acc, k) => (acc as any)?.[k], input)
     : input;
   const items = Array.isArray(source) ? source : source == null ? [] : [source];
-  const leaves = leafNodeIds(sg.nodes, sg.edges);
+  const { nodes: sgExecNodes, edges: sgExecEdges } = stripAnnotationNodes(sg.nodes, sg.edges);
+  const leaves = leafNodeIds(sgExecNodes, sgExecEdges);
 
   async function runOne(item: unknown, index: number): Promise<{ result: unknown; brk: boolean; skip: boolean }> {
     const state: RunState = { outputs: new Map(), nodeStatus: new Map(), branchTaken: new Map() };
       await runLevels({
         executionId,
         workflowId,
+        workspaceId,
         nodes: sg.nodes,
         edges: sg.edges,
         triggerPayload: item,
@@ -421,6 +583,8 @@ async function runForEachBranch(
         persist: false,
         nodeIdPrefix: `${node.id}[${index}].`,
         depth: depth + 1,
+        vars,
+        staticData,
       });
     const leafOutputs = leaves.map((id) => itemsToLegacyValue(state.outputs.get(id) ?? []));
     const merged = leafOutputs.length === 1 ? leafOutputs[0] : leafOutputs;
@@ -444,6 +608,38 @@ async function runForEachBranch(
 }
 
 /**
+ * Error Workflow — if the failed workflow has `errorWorkflowId` set, runs
+ * that workflow (as its own top-level execution, visible in its own
+ * history) with `{ failedWorkflowId, executionId, errorMessage }` as its
+ * trigger payload. Self-references are skipped to avoid infinite
+ * recursion; failures dispatching the error workflow are logged, never
+ * thrown, since a notification path must never crash the run it's
+ * reporting on.
+ */
+async function dispatchErrorWorkflow(
+  workflowId: string,
+  executionId: string,
+  errorMessage?: string
+): Promise<void> {
+  try {
+    const wf = await getWorkflow(workflowId);
+    const errorWorkflowId = wf?.errorWorkflowId;
+    if (!errorWorkflowId || errorWorkflowId === workflowId) return;
+    const errorWf = await getWorkflow(errorWorkflowId);
+    if (!errorWf) return;
+    const graph: WorkflowGraph = { nodes: errorWf.nodesJson as WorkflowNode[], edges: errorWf.edgesJson as WorkflowEdge[] };
+    await executeWorkflow(
+      errorWorkflowId,
+      graph,
+      'manual',
+      { failedWorkflowId: workflowId, executionId, errorMessage: errorMessage ?? null }
+    );
+  } catch (err) {
+    console.error('[executor] failed to dispatch error workflow', err);
+  }
+}
+
+/**
  * Executes a workflow graph. See runLevels() for the core semantics
  * (parallel branches, skip propagation, retry, continue-on-fail,
  * expressions). This wrapper owns the top-level Execution row and the
@@ -456,17 +652,24 @@ export async function executeWorkflow(
   triggerType: ExecutionJobData['triggerType'],
   triggerPayload: unknown,
   emit: StatusEmitter = () => {},
-  depth = 0
+  depth = 0,
+  presetExecutionId?: string
 ): Promise<{ executionId: string; status: 'success' | 'failed' | 'paused'; output?: unknown }> {
-  const executionId = await createExecution(workflowId, triggerType);
+  const executionId = await createExecution(workflowId, triggerType, presetExecutionId);
+  const wfRow = await getWorkflow(workflowId);
+  const workspaceId = wfRow?.workspaceId ?? null;
   emit({ executionId, status: 'started' });
+  await dispatchLogStreamEvent(workspaceId, { workflowId, executionId, status: 'started' });
 
+  const vars = await getVariablesMapForWorkflow(workflowId);
+  const staticData = await getWorkflowStaticData(workflowId);
   const state: RunState = { outputs: new Map(), nodeStatus: new Map(), branchTaken: new Map() };
   let result: { status: 'success' | 'failed' | 'paused' };
   try {
     result = await runLevels({
       executionId,
       workflowId,
+      workspaceId,
       nodes: graph.nodes,
       edges: graph.edges,
       triggerPayload,
@@ -475,11 +678,15 @@ export async function executeWorkflow(
       persist: true,
       nodeIdPrefix: '',
       depth,
+      vars,
+      staticData,
     });
   } catch (err) {
     await finishExecution(executionId, 'failed');
     await dispatchExecutionAlerts(workflowId, executionId, 'failed', (err as Error).message);
+    await dispatchErrorWorkflow(workflowId, executionId, (err as Error).message);
     emit({ executionId, status: 'failed', error: (err as Error).message });
+    await dispatchLogStreamEvent(workspaceId, { workflowId, executionId, status: 'failed', error: (err as Error).message });
     return { executionId, status: 'failed' };
   }
 
@@ -487,13 +694,21 @@ export async function executeWorkflow(
     return { executionId, status: 'paused' };
   }
 
-  const leaves = leafNodeIds(graph.nodes, graph.edges);
+  const { nodes: execNodes, edges: execEdges } = stripAnnotationNodes(graph.nodes, graph.edges);
+  const leaves = leafNodeIds(execNodes, execEdges);
   const leafOutputs = leaves.map((id) => itemsToLegacyValue(state.outputs.get(id) ?? []));
   const output = leafOutputs.length === 1 ? leafOutputs[0] : leafOutputs;
 
   await finishExecution(executionId, result.status);
   await dispatchExecutionAlerts(workflowId, executionId, result.status);
-  emit({ executionId, status: 'completed' });
+  if (result.status === 'failed') await dispatchErrorWorkflow(workflowId, executionId);
+  emit({ executionId, status: 'completed', output, error: result.status === 'failed' ? 'Workflow execution failed' : undefined });
+  await dispatchLogStreamEvent(workspaceId, {
+    workflowId,
+    executionId,
+    status: result.status === 'failed' ? 'failed' : 'completed',
+    error: result.status === 'failed' ? 'Workflow execution failed' : undefined,
+  });
   return { executionId, status: result.status, output };
 }
 
@@ -528,14 +743,19 @@ export async function resumeExecution(
   state.nodeStatus.set(paused.resumeNodeId, 'success');
 
   await clearCheckpointAndMarkRunning(executionId);
+  const workspaceId = wf.workspaceId ?? null;
   emit({ executionId, status: 'started', nodeId: paused.resumeNodeId, output: resumeInput });
+  await dispatchLogStreamEvent(workspaceId, { workflowId: paused.workflowId, executionId, status: 'started' });
 
   const graph: WorkflowGraph = { nodes: wf.nodesJson as WorkflowNode[], edges: wf.edgesJson as WorkflowEdge[] };
+  const vars = await getVariablesMapForWorkflow(paused.workflowId);
+  const staticData = await getWorkflowStaticData(paused.workflowId);
   let result: { status: 'success' | 'failed' | 'paused' };
   try {
     result = await runLevels({
       executionId,
       workflowId: paused.workflowId,
+      workspaceId,
       nodes: graph.nodes,
       edges: graph.edges,
       triggerPayload: undefined,
@@ -544,23 +764,35 @@ export async function resumeExecution(
       persist: true,
       nodeIdPrefix: '',
       depth: 0,
+      vars,
+      staticData,
     });
   } catch (err) {
     await finishExecution(executionId, 'failed');
     await dispatchExecutionAlerts(paused.workflowId, executionId, 'failed', (err as Error).message);
+    await dispatchErrorWorkflow(paused.workflowId, executionId, (err as Error).message);
     emit({ executionId, status: 'failed', error: (err as Error).message });
+    await dispatchLogStreamEvent(workspaceId, { workflowId: paused.workflowId, executionId, status: 'failed', error: (err as Error).message });
     return { executionId, status: 'failed' };
   }
 
   if (result.status === 'paused') return { executionId, status: 'paused' };
 
-  const leaves = leafNodeIds(graph.nodes, graph.edges);
+  const { nodes: execNodes, edges: execEdges } = stripAnnotationNodes(graph.nodes, graph.edges);
+  const leaves = leafNodeIds(execNodes, execEdges);
   const leafOutputs = leaves.map((id) => itemsToLegacyValue(state.outputs.get(id) ?? []));
   const output = leafOutputs.length === 1 ? leafOutputs[0] : leafOutputs;
 
   await finishExecution(executionId, result.status);
   await dispatchExecutionAlerts(paused.workflowId, executionId, result.status);
-  emit({ executionId, status: 'completed' });
+  if (result.status === 'failed') await dispatchErrorWorkflow(paused.workflowId, executionId);
+  emit({ executionId, status: 'completed', output, error: result.status === 'failed' ? 'Workflow execution failed' : undefined });
+  await dispatchLogStreamEvent(workspaceId, {
+    workflowId: paused.workflowId,
+    executionId,
+    status: result.status === 'failed' ? 'failed' : 'completed',
+    error: result.status === 'failed' ? 'Workflow execution failed' : undefined,
+  });
   return { executionId, status: result.status, output };
 }
 
@@ -622,13 +854,18 @@ export async function retryFromNode(
   }
 
   const executionId = await createExecution(original.workflowId, 'manual');
+  const workspaceId = wf.workspaceId ?? null;
   emit({ executionId, status: 'started' });
+  await dispatchLogStreamEvent(workspaceId, { workflowId: original.workflowId, executionId, status: 'started' });
 
+  const vars = await getVariablesMapForWorkflow(original.workflowId);
+  const staticData = await getWorkflowStaticData(original.workflowId);
   let result: { status: 'success' | 'failed' | 'paused' };
   try {
     result = await runLevels({
       executionId,
       workflowId: original.workflowId,
+      workspaceId,
       nodes: graph.nodes,
       edges: graph.edges,
       triggerPayload,
@@ -637,22 +874,34 @@ export async function retryFromNode(
       persist: true,
       nodeIdPrefix: '',
       depth: 0,
+      vars,
+      staticData,
     });
   } catch (err) {
     await finishExecution(executionId, 'failed');
     await dispatchExecutionAlerts(original.workflowId, executionId, 'failed', (err as Error).message);
+    await dispatchErrorWorkflow(original.workflowId, executionId, (err as Error).message);
     emit({ executionId, status: 'failed', error: (err as Error).message });
+    await dispatchLogStreamEvent(workspaceId, { workflowId: original.workflowId, executionId, status: 'failed', error: (err as Error).message });
     return { executionId, status: 'failed' };
   }
 
   if (result.status === 'paused') return { executionId, status: 'paused' };
 
-  const leaves = leafNodeIds(graph.nodes, graph.edges);
+  const { nodes: execNodes, edges: execEdges } = stripAnnotationNodes(graph.nodes, graph.edges);
+  const leaves = leafNodeIds(execNodes, execEdges);
   const leafOutputs = leaves.map((id) => itemsToLegacyValue(state.outputs.get(id) ?? []));
   const output = leafOutputs.length === 1 ? leafOutputs[0] : leafOutputs;
 
   await finishExecution(executionId, result.status);
   await dispatchExecutionAlerts(original.workflowId, executionId, result.status);
-  emit({ executionId, status: 'completed' });
+  if (result.status === 'failed') await dispatchErrorWorkflow(original.workflowId, executionId);
+  emit({ executionId, status: 'completed', output, error: result.status === 'failed' ? 'Workflow execution failed' : undefined });
+  await dispatchLogStreamEvent(workspaceId, {
+    workflowId: original.workflowId,
+    executionId,
+    status: result.status === 'failed' ? 'failed' : 'completed',
+    error: result.status === 'failed' ? 'Workflow execution failed' : undefined,
+  });
   return { executionId, status: result.status, output };
 }

@@ -16,7 +16,10 @@ import './moreIntegrations';
 import './businessIntegrations';
 import './cloudIntegrations';
 import './agentNode';
-import './stubNodes';
+import './emailNode';
+import './googleSheetsNode';
+import './dataTableNode';
+import './fileNode';
 
 import { loadCommunityNodes } from './communityLoader';
 loadCommunityNodes();

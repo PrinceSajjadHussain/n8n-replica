@@ -11,8 +11,9 @@ marketplace.
   JWT auth, AES-256-GCM credential encryption, `isolated-vm` sandboxed Code node
 - **Frontend**: React 19, Vite, `@xyflow/react` (React Flow), Zustand, TanStack Query,
   Tailwind CSS, Socket.IO client
-- **Monorepo**: pnpm workspaces (`apps/api`, `apps/worker`, `apps/web`,
-  `packages/shared-types`, `services/browser-runner`)
+- **Monorepo**: npm workspaces (`apps/api`, `apps/worker`, `apps/web`,
+  `packages/shared-types`, `services/browser-runner`) — see `RUN_LOCALLY.md` for a full
+  local/VS Code setup walkthrough
 
 ## Architecture
 
@@ -56,7 +57,10 @@ interface doc and a copy-paste template — adding a new built-in node means imp
 
 **Core / logic** — `webhook`, `schedule`, `httpRequest`, `if`, `switch`, `merge`, `set`,
 `code` (sandboxed via `isolated-vm`), `wait`, `forEach` / `forEachBranch`,
-`waitForWebhook`, `humanApproval`, `subWorkflow`
+`waitForWebhook`, `humanApproval`, `subWorkflow`, `respondToWebhook` (see "Webhook response
+modes" below), `dataTableRead` / `dataTableWrite` (see "Data persistence primitives"
+below), `fileExtract` / `fileConvert` (CSV/JSON/text ↔ items, see "Binary/file data
+support" below)
 
 **Triggers** — `webhook`, `schedule`, `emailTrigger` (real IMAP via `imapflow`, IDLE push
 with polling fallback), `fileWatcher` (`fs.watch`), `databaseChange` (Postgres
@@ -99,10 +103,16 @@ Full author-facing SDK docs: `docs/community-nodes.md`.
 
 ```
 GET    /marketplace?query=airtable   browse the curated index
-POST   /marketplace/install          { "npmPackage": "flowforge-node-airtable" }
+POST   /marketplace/install          { "npmPackage": "flowforge-node-airtable", "version": "1.2.0" }
 GET    /marketplace/installed        what's actually installed on this instance
 DELETE /marketplace/:name            uninstall
 ```
+
+A full UI for this lives at **Marketplace** in the sidebar
+(`apps/web/src/pages/MarketplacePage.tsx`): browse/search the curated index, install with
+an optional pinned npm version (leave blank for latest), see what's actually installed
+with its version and node types, "Check for updates" (re-resolves `latest` and reports
+whether it changed), and uninstall. Previously this was API-only with no frontend.
 
 Installed nodes are namespaced `community.<packageName>.<nodeType>` so they can never
 collide with (or shadow) a built-in node. Installing downloads the package's real npm
@@ -193,6 +203,11 @@ GET           /workflows/:id/activity                          per-workflow acti
                                                                  activated/execution failed/succeeded/etc.)
 GET/POST      /workflows/:id/alerts                             list / configure failure & success notifications (editor+)
 PATCH/DELETE  /workflows/:id/alerts/:alertId                    pause, retarget, or remove an alert (editor+)
+
+GET/POST      /workspaces/:workspaceId/log-streams               list / register a workspace-wide operational log
+                                                                 stream target (admin+ — see "Operations & collaboration
+                                                                 polish" below)
+PATCH/DELETE  /workspaces/:workspaceId/log-streams/:logStreamId  pause/retarget/remove a log stream target (admin+)
 ```
 
 Alerts fire from the worker (`apps/worker/src/utils/alerts.ts`) right after an execution
@@ -212,7 +227,78 @@ a role, change a member's role, or remove them — all gated the same way as the
 management still doesn't have a page yet — call `GET/POST /workspaces/:workspaceId/folders`
 and `PATCH/DELETE /workspaces/folders/:folderId` directly for now.
 
-## Triggers beyond webhook/schedule
+### Workflow-level sharing & ownership transfer
+
+Independent of workspace roles, a single workflow can now be shared directly with a
+specific user (e.g. someone outside its workspace, or at a narrower/wider role than their
+workspace membership would otherwise give them) via `WorkflowShare`
+(`00000000000007_workflow_sharing_webhook_modes` migration) — the same pattern
+`CredentialShare` already used for credentials, adapted to the `viewer`/`editor`/`admin`
+role rank. `getWorkflowRole` (`apps/api/src/db/workspaces.ts`) now resolves a caller's
+effective role as the *higher* of their workspace-membership role and any direct
+`WorkflowShare` grant (the real owner, `Workflow.userId`, always wins outright).
+
+```
+GET     /workflows/:id/shares                      list direct shares (admin+)
+POST    /workflows/:id/shares                       { email, role } — share with a user (admin+)
+DELETE  /workflows/:id/shares/:userId                remove a share (admin+)
+POST    /workflows/:id/transfer-ownership            { email } — make another user the real
+                                                      owner (owner only); the previous owner is
+                                                      kept on as an `admin` share so they don't
+                                                      lose access outright
+```
+
+The canvas has a **Share** button (top toolbar) opening a modal to add/remove direct
+shares by email and role, and a "Transfer ownership" form gated to the actual owner.
+
+## Variables, tags, error workflows, and manual test payloads
+
+Four core n8n primitives that were previously missing entirely:
+
+**Variables (`$vars`)** — an instance-wide or workspace-scoped key/value store, referenced
+in any node's params exactly like `$json`/`$env`: `{{$vars.API_BASE_URL}}`. A variable with
+`workspaceId: null` is global (visible to every workflow); a workspace-scoped variable of
+the same key wins for workflows in that workspace. Resolved once per top-level execution
+(`getVariablesMapForWorkflow`) and threaded through nested `subWorkflow`/`forEachBranch`
+runs, resumes, and retries.
+
+```
+GET/POST      /variables?workspaceId=...     list (global + workspace-scoped) / create
+PATCH/DELETE  /variables/:id                 rename key or change value / delete
+```
+
+**Tags** — named labels, scoped to a workspace (or global), attached to workflows
+many-to-many so they can be filtered in the workflow list (`GET /workflows?tag=<tagId>`).
+
+```
+GET/POST      /tags?workspaceId=...          list (global + workspace-scoped) / create
+DELETE        /tags/:id                      delete a tag (detaches it from all workflows)
+GET           /tags/workflows/:workflowId     tags on one workflow
+PUT           /tags/workflows/:workflowId     replace a workflow's full tag set ({ tagIds: [] })
+```
+
+**Error Workflow** — set `errorWorkflowId` on a workflow (via `PUT /workflows/:id`) to
+designate another workflow that auto-runs whenever *this* workflow's execution fails.
+The error workflow receives `{ failedWorkflowId, executionId, errorMessage }` as its
+manual trigger payload, and runs as its own top-level execution (visible in its own
+execution history) — wired in alongside the existing alert dispatch in
+`apps/worker/src/engine/executor.ts` (`dispatchErrorWorkflow`), covering the initial run,
+`resumeExecution`, and `retryFromNode`. Self-referencing `errorWorkflowId` is ignored to
+avoid infinite recursion; dispatch failures are logged, never thrown.
+
+**Manual trigger test payload** — the JSON body used for the last manual "Run" of a
+workflow is now persisted on the `Workflow` row (`lastManualTestPayload`), mirroring n8n's
+canvas "test workflow" panel remembering your last input across editor sessions.
+
+```
+GET  /workflows/:id/test-payload    read the persisted payload
+PUT  /workflows/:id/test-payload    overwrite it directly
+POST /workflows/:id/execute         with a JSON body: runs + re-persists that body as the
+                                     new "last" payload; with an empty body: replays the
+                                     last persisted payload instead of running with `{}`
+```
+
+
 
 `apps/api/src/utils/` holds the poller/consumer processes that seed these trigger nodes'
 `input` and enqueue an execution job — the trigger node itself is a no-op at execution
@@ -226,6 +312,38 @@ time, consistent with how `webhook`/`schedule` already worked:
 None of these are wired to a management UI yet — call the `register*Trigger` functions
 directly (e.g. from a workflow-activation hook) with the connection config for now.
 
+## Webhook response modes
+
+`apps/api/src/routes/webhook.ts` supports n8n's three webhook response modes, chosen via
+the triggering `webhook` node's `params.responseMode` (defaults to `'immediately'` if
+unset, so existing workflows keep their original behavior):
+
+- **`immediately`** (default) — the HTTP request is acked the instant the execution job
+  is enqueued, same as before this pass.
+- **`lastNode`** — the HTTP connection is held open until the whole execution finishes,
+  then responds with the workflow's final leaf-node output (or a 500 with the error if
+  the run failed).
+- **`responseNode`** — the HTTP connection is held open for a **`respondToWebhook`** node
+  (palette: "Respond to Webhook") anywhere in the graph to answer explicitly with its own
+  `statusCode`/`responseBody`/`responseHeaders` params; the rest of the workflow keeps
+  running in the background afterward. If the workflow finishes without ever reaching one
+  (e.g. a branch skipped it), it falls back to the `lastNode` behavior instead of hanging.
+
+Both waiting modes give up after `WEBHOOK_RESPONSE_TIMEOUT_MS` (default 30000) and
+respond `504` rather than holding the connection forever. Implementation notes:
+
+- The API route pre-generates the execution's id and passes it through the BullMQ job
+  as `presetExecutionId`; `executeWorkflow` (`apps/worker/src/engine/executor.ts`) now
+  accepts that as an optional param and uses it as the `Execution` row's real id instead
+  of always minting its own — this was previously a "placeholder" per an existing code
+  comment (the manual `POST /workflows/:id/execute` route generated an id that the worker
+  silently discarded and replaced), so it's now accurate for every trigger type, not just
+  webhooks.
+- The wait itself piggybacks on the existing Redis pub/sub status channel
+  (`flowforge:execution-status`, already used for the real-time canvas) rather than a
+  second queue or polling loop — the route subscribes for its executionId and resolves
+  as soon as the right status event (`webhook-response` or `completed`) arrives.
+
 ## A note on the data layer
 
 `prisma/schema.prisma` is the canonical schema (models, indexes, cascading deletes) and
@@ -238,6 +356,16 @@ directly (e.g. from a workflow-activation hook) with the connection config for n
 5. `00000000000004_community_nodes` — installed marketplace package tracking
 6. `00000000000005_versioning_collaboration` — workspaces, members/roles, workflow folders,
    comments, activity log, alert configs (backfills a personal workspace for existing users)
+7. `00000000000006_variables_tags_error_workflow` — global/workspace `Variable` store
+   (`$vars`), `Tag`/`WorkflowTag` many-to-many, `Workflow.errorWorkflowId`, and
+   `Workflow.lastManualTestPayload`
+8. `00000000000007_workflow_sharing_webhook_modes` — `WorkflowShare` (direct per-user
+   workflow sharing, independent of workspace roles; see "Workflow-level sharing &
+   ownership transfer" above)
+9. `00000000000008_data_tables_static_data` — `DataTable`/`DataTableRow` (Phase 7's
+   built-in key-value/tabular store) and `Workflow.staticData`
+10. `00000000000009_workflow_test_cases` — `WorkflowTestCase` (Phase 9's saved test
+    inputs/expected-outputs + scorer config)
 
 The application code queries via `pg` directly (see `apps/api/src/db/*.ts` and
 `apps/worker/src/db/*.ts`) rather than the generated Prisma Client, because this was
@@ -276,30 +404,38 @@ Bring up the optional browser-automation sidecar explicitly with
 The first time, apply all migrations in order to the fresh Postgres container:
 
 ```bash
-for m in apps/api/prisma/migrations/*/migration.sql; do psql "$DATABASE_URL" -f "$m"; done
+npm run prisma:migrate:deploy
 ```
 
-(If you have internet access and prefer Prisma-managed migrations:
-`cd apps/api && npx prisma migrate deploy`.)
+(Runs `prisma migrate deploy` inside `apps/api`. If you don't have internet access for
+Prisma's engine binaries, apply the raw SQL instead:
+`for m in apps/api/prisma/migrations/*/migration.sql; do psql "$DATABASE_URL" -f "$m"; done`.)
 
 ### 4. Open the app
 
 Visit `http://localhost:5173`, sign up, and start building.
 
-## Running locally without Docker
+## Running locally without Docker (or with Docker for just Postgres/Redis)
+
+This repo is an **npm workspaces** monorepo (see `RUN_LOCALLY.md` for the full
+walkthrough, including running it from VS Code with only Postgres/Redis in Docker):
 
 ```bash
-pnpm install
-# start postgres + redis yourself, then:
-pnpm --filter @flowforge/api dev
-pnpm --filter @flowforge/worker dev
-pnpm --filter @flowforge/web dev
+npm install
+docker compose up -d postgres redis   # or point DATABASE_URL/REDIS_URL at your own
+npm run prisma:migrate:deploy
+npm run build:shared-types
+npm run build:node-sdk
+npm run dev:api      # http://localhost:4000
+npm run dev:worker
+npm run dev:web      # http://localhost:5173
 ```
 
 ## Building a workflow
 
 1. Open a workflow, drag nodes in from the left palette (built-in nodes plus anything
-   installed from the marketplace).
+   installed from the marketplace) — use the search box at the top to filter by name,
+   type, or category, or pick from **Recently used**.
 2. Click a node to configure its `params` (JSON) and, for integrations, pick a saved
    credential from **Credentials**.
 3. Connect nodes by dragging from the right handle to the next node's left handle. IF /
@@ -329,23 +465,58 @@ This is a large, actively-growing codebase rather than a finished product. Curre
 honestly:
 
 **Solid / production-shaped:** execution engine (item-paired data, retries, branching,
-pause/resume), auth + credential encryption, webhook/schedule triggers, workflow
+pause/resume), auth + credential encryption, webhook/schedule triggers (now with all
+three n8n response modes — see "Webhook response modes" above), workflow
 versioning (draft/publish/rollback/diff), the node plugin system, the community node
-marketplace (real npm install/uninstall + hot reload), and RAG (real loaders, smart
+marketplace (real npm install/uninstall/update with version pinning + hot reload, now
+with a full browse/search/manage UI at **Marketplace** — see "Community/marketplace
+nodes" above), RAG (real loaders, smart
 chunking, pluggable vector DBs, hybrid search + reranking — see "Production-grade RAG"
-above and `docs/rag.md`).
+above and `docs/rag.md`), the core n8n primitives — global/workspace `$vars`
+Variables, workflow Tags, designated Error Workflow, and a persisted manual-trigger test
+payload (see "Variables, tags, error workflows, and manual test payloads" above), and
+workflow-level sharing/ownership transfer (see "Workflow-level sharing & ownership
+transfer" above). Pin
+Data itself (`node.isPinned`/`pinnedOutput`) was already wired into the execution engine
+and persisted as part of the normal workflow save — there's just no *dedicated*
+set/clear-pin endpoint separate from a full `PUT /workflows/:id` yet. The node palette
+(left sidebar in the canvas) now has search-as-you-type (substring match, falling back to
+fuzzy subsequence match) plus a "Recently used" section persisted in `localStorage`, and
+now renders every node as a colored icon tile (shared with the canvas node chrome via
+`apps/web/src/lib/nodeTypeMeta.ts`) grouped by category, matching the Make.com/n8n-style
+app picker. The credentials form covers all 10 credential types the built-in nodes
+actually need (`slack`, `discord`, `telegram`, `notion`, `github`, `postgres`,
+`httpBearer`, `email`, `googleSheets`, `openai` — previously only 5 of these had a real
+form, so half the integration nodes had no way to get a working credential through the
+UI at all) with real typed fields per credential type (masked password inputs, a
+provider dropdown for email, etc., generated from a shared per-type field schema in
+`apps/web/src/lib/credentialSchemas.ts`) instead of one generic JSON textarea for every
+type — power users can still drop into a raw-JSON view via "Edit as raw JSON instead". A
+node's config panel now shows a live-status credential picker (name + ✓/⚠ test-result
+marker, grouped by matching type first) with an inline **"+ New credential…"** option and
+a **"🔌 Test connection"** button, so setting up and verifying a node's credential no
+longer requires leaving the canvas — see "Credential UX overhaul" below for the full
+before/after. The execution log
+viewer (per-node Input/Output panels in **Execution history**) has a Table / JSON /
+Schema view toggle, matching n8n's inspector — Table flattens one level of keys/values,
+Schema shows each field's runtime type, JSON is the original pretty-printed dump.
 
 **Real but intentionally light:** the new email/DB/file/stream triggers (functional
 pollers, no management UI yet), the AI agent layer (real tool use + short/long-term
 memory + multi-agent orchestration + reasoning-trace UI — see "AI agents" above and
 `docs/ai-agents.md` — memory/vector-recall storage is still the JSON-on-disk store, not
-yet switched over to the pluggable vector-store layer RAG now uses).
+yet switched over to the pluggable vector-store layer RAG now uses). Variables and Error
+Workflow now have dedicated UI (see "Environment variables & version history UI (Phase 6
+depth pass)" below); Tags/test-payload are still real API + engine wiring with no
+dedicated panel yet — call the endpoints directly for now (same status as folders in the
+collaboration section).
 
 **Not started:** SSO/LDAP/SAML/RBAC/audit logs/rate limiting, a custom-node SDK CLI +
 hot-reload dev workflow (the marketplace covers *installing* community nodes; there's no
 scaffolding tool for *authoring* one yet), import from n8n/Make/Zapier, export to
-LangGraph/CrewAI/Docker/Python, and UI polish (sticky notes, node grouping, auto-layout,
-mini-map, command palette, template gallery).
+LangGraph/CrewAI/Docker/Python, and UI polish (node grouping's persistence across reload
+is now fixed — see below — but auto-layout, mini-map, command palette, and a template
+gallery remain open).
 
 ## Tests run during development (see delivery log)
 
@@ -367,7 +538,454 @@ mini-map, command palette, template gallery).
   worker executes real sandboxed Code node math (21 → 42) → DB row shows `success` with
   full per-node input/output trail
 
+**Phase 3 depth pass (this round):** credentials form switched from one generic JSON
+textarea to real per-type field schemas (`CredentialsPage.tsx`); node palette got
+search-as-you-type + fuzzy fallback + a "Recently used" section (`NodePalette.tsx`);
+execution log viewer got a Table / JSON / Schema toggle for per-node input/output
+(`ExecutionHistoryPage.tsx`); the community node marketplace — previously API-only with
+zero frontend — got a full page at `/marketplace` (browse/search, install with version
+pinning, installed list, update check, uninstall), wired into routing and the sidebar
+nav. Verified with a parser-level syntax check (TypeScript's source-file parser, via a
+throwaway script) across every `.ts`/`.tsx` file in `apps/web`, `apps/api`, `apps/worker`,
+and `packages/shared-types` — zero parse errors. Note: a full `pnpm install` + `tsc -b`
+type-check could not be completed in this sandbox — pnpm 11 in this environment fails to
+resolve the `@flowforge/shared-types` workspace dependency (404s against the public npm
+registry instead of linking the local workspace package) even with
+`link-workspace-packages`/`prefer-workspace-packages` set; this reproduces on a clean
+`node_modules` wipe and is unrelated to the edits in this pass. Re-run `pnpm install &&
+pnpm -F @flowforge/web build` in a normal dev environment to get full type-checking on
+top of the syntax check already done here.
+
 *(Note: the integration/agent/versioning/marketplace additions above were built and
 reviewed for correctness against their respective SDKs/APIs, but have not been re-run
 through the live end-to-end test suite described in this section — do that before
 deploying any of it to production.)*
+
+**Phase 4 depth pass (this round):** workflow-level sharing + ownership transfer
+(`WorkflowShare` table, `GET/POST/DELETE /workflows/:id/shares`,
+`POST /workflows/:id/transfer-ownership`, a **Share** modal on the canvas — see
+"Workflow-level sharing & ownership transfer" above); webhook response modes
+(`immediately`/`lastNode`/`responseNode`, a new `respondToWebhook` node — see "Webhook
+response modes" above).
+
+While verifying the sticky-note request for this pass ("sticky notes — verify freeform
+text, not tied to node execution"), found and fixed a real bug: sticky notes (and group
+containers) were being saved with `type: 'note'`/no type at all and reloaded as if they
+were real `flowNode`s, and — because they have no edges and thus no incoming dependency —
+the execution engine picked them up as level-0 root nodes and threw `No node plugin
+registered for type "note"` on every run, marking the whole execution `failed` any time a
+workflow had a sticky note on its canvas. Fixed at two layers: (1) the frontend
+(`CanvasPage.tsx`) now saves sticky notes/groups with their real `stickyNote`/`group`
+type, size, and parent/nesting info (so they also now survive a page reload, which they
+silently didn't before either), and (2) the worker's executor now has a
+`NON_EXECUTABLE_NODE_TYPES` filter that strips any `stickyNote`/`group` node (and edges
+touching one) out of the graph before `computeLevels` runs, at every entry point
+(top-level execution, resume, retry, sub-workflow, `forEachBranch`) — so this can't
+regress even if a future frontend change reintroduces a bad payload shape.
+
+Also, while implementing `responseNode`/`lastNode` webhook modes, found that
+`ExecutionJobData.executionId` was already a dead field — a comment on it literally said
+"placeholder; the worker creates the authoritative row" — because `createExecution`
+always minted its own id, discarding the one the API route generated and returned to
+callers. Needed a real fix (not a workaround) since the webhook route has to know the
+execution's id *before* enqueueing, to subscribe for its status events without a race.
+`createExecution`/`executeWorkflow` now accept an optional preset id and use it when
+given; the worker passes `job.data.executionId` through for every trigger type, so this
+also fixes the same latent issue for manual runs, not just webhooks.
+
+Verified with the same parser-level syntax check as the Phase 3 pass (zero parse errors
+across all 122 `.ts`/`.tsx` files in `apps/web`, `apps/api`, `apps/worker`, and
+`packages/shared-types`). The same `pnpm install`/`tsc -b` limitation noted in the Phase 3
+paragraph above still applies in this sandbox — re-run a full build in a normal dev
+environment before deploying.
+
+## Data persistence primitives (Phase 7 depth pass)
+
+Gap: no built-in place for a workflow to persist simple state — every "remember the last
+processed id" or "dedupe against what we've seen" use case required an external Postgres
+credential. Added two primitives, both scoped honestly (workspace vs. per-workflow) rather
+than conflated into one.
+
+### Data Table — a built-in key-value/tabular store
+
+- **Schema**: `DataTable` (workspace-scoped, user-defined `columns`) + `DataTableRow`
+  (free-form JSONB `data`) — migration
+  `00000000000008_data_tables_static_data`. Rows are matched/filtered via
+  `data->>'col' = 'val'`, backed by a GIN index rather than per-column real columns, since
+  the column set is user-defined and changes over time.
+- **API**: `apps/api/src/routes/dataTables.ts` — table CRUD gated at workspace `admin`,
+  row CRUD gated at workspace `editor`/`viewer` (mirrors the Variables permission model).
+- **Worker nodes**: `apps/worker/src/nodes/dataTableNode.ts` — **Data Table: Get/List**
+  (`mode: 'list' | 'get'`, optional `filterColumn`/`filterValue`) and **Data Table:
+  Insert/Update/Delete** (`operation: 'insert' | 'update' | 'delete'`). Both resolve the
+  table by `(workspaceId, tableName)` — the same "reference by name, not id" pattern
+  credentials use — via `apps/worker/src/db/dataTables.ts`. Required adding `workflowId`/
+  `workspaceId` to `NodeExecutionContext` (see `nodes/types.ts`) and threading
+  `workspaceId` through the executor (`executeWorkflow`/`resumeExecution`/`retryFromNode`/
+  `runForEachBranch` all now resolve and pass it down) — this is the one execution-engine
+  change this phase required, per the standing constraint of only touching the engine when
+  a phase explicitly needs a new field.
+- **UI**: `apps/web/src/pages/DataTablesPage.tsx` at `/data-tables` — pick a workspace,
+  pick a table, edit cells inline (blur-to-save), add/delete rows, create a table by
+  typing a comma-separated column list. No bulk import/export or per-column type
+  validation UI yet (`columns[].type` is stored and sent to the API but not yet enforced
+  client-side beyond the identifier-format check on the name).
+
+### Workflow static data — `$getWorkflowStaticData()`/`$setWorkflowStaticData()`
+
+- **Schema**: `Workflow.staticData` (`JSONB DEFAULT '{}'`), same migration as above.
+- **Read**: any node's params can reference `{{$staticData.KEY}}` (added to
+  `engine/expressions.ts` alongside the existing `$vars` — same `getPath` mechanics,
+  snapshotted once per top-level run, same as `$vars`).
+- **Read/write**: the Code node (`apps/worker/src/nodes/codeNode.ts`) bridges
+  `$getWorkflowStaticData()` (returns the snapshot) and `$setWorkflowStaticData(data)`
+  into the `isolated-vm` sandbox via an `ivm.Reference` — the setter only records the
+  replacement value inside the isolate; the actual Postgres write happens once, after the
+  script finishes, so a script calling it in a loop doesn't hammer the DB. Deliberately a
+  full-blob replacement (like `$vars`/`localStorage`), not a per-key patch — merge
+  yourself first (`$setWorkflowStaticData({ ...$getWorkflowStaticData(), lastId: 42 })`)
+  if you only want to change one field.
+- Only the Code node can *write* it in this pass (matches the phase brief: "readable/
+  writable from Code nodes and expressions" — expressions are read-only by construction in
+  this engine, so the write path only ever made sense from Code). Other node types could
+  gain write access later via the same `setStaticData` context field — it's already on
+  `NodeExecutionContext` for any plugin that wants it.
+
+### Verified
+
+Parser-level syntax check across every file touched or added this pass (worker engine,
+worker nodes, both `db/dataTables.ts` modules, API routes, frontend) — zero parse errors.
+Same sandbox limitation as prior phases: no live `pnpm install`/`tsc -b` in this
+environment (workspace-link resolution fails offline) — run `pnpm install && pnpm -r
+build` before deploying. Also unverified end-to-end (no live Postgres in this sandbox):
+the `DataTableRow` GIN-index filter query and the `isolated-vm` `Reference.applySync`
+bridge should be exercised against a real DB/isolate before relying on them in production.
+
+## Binary/file data support (Phase 8 depth pass)
+
+Goal: a real file/attachment data type flowing between nodes (n8n's binary-data
+convention), plus generic CSV/JSON/text conversion utilities and previews in the
+inspector — rather than JSON-only items.
+
+### What was already there vs. what this pass added
+
+Tracing the item model before writing anything showed the binary *passthrough*
+itself — `BinaryData`/`BinaryCollection` on `NodeItem` (`packages/shared-types`),
+`getBinary()`/`toBinary()` on `NodeExecutionContext`, `{{$binary.*}}` expression support
+(`engine/expressions.ts`), and metadata-only stripping for logs/expressions
+(`engine/executor.ts`'s `stripBinaryData`) — were already fully implemented in an earlier
+pass. What was actually missing, and what this pass built:
+
+- **`apps/worker/src/nodes/fileNode.ts`** *(new)* — two generic utility nodes:
+  - **Extract from File** (`fileExtract`) — reads a named binary property (default
+    `"data"`) off each input item and parses it into item(s): `csv` → one output item per
+    row (via the existing `csv-parse/sync` dependency, same as the RAG CSV loader),
+    `json` → array-to-items / object-to-one-item, `text` → `{ text: <utf8 string> }`.
+    `dropBinary: true` excludes the original attachment from the parsed items.
+  - **Convert to File** (`fileConvert`) — flattens all input items' `json` into one
+    binary attachment (`csv` via a small dependency-free writer with proper
+    comma/quote/newline escaping, or `json`) on a single output item, ready to hand to
+    `email`/`httpRequest`/`slack`/`respondToWebhook`.
+  - Both registered in `apps/worker/src/nodes/index.ts`; `fileExtract`/`fileConvert`
+    (and the previously-unlisted `dataTableRead`/`dataTableWrite`) added to the `NodeType`
+    union in `packages/shared-types`.
+- **Preview rendering** — `NodeStatusEvent` (`packages/shared-types`) gained an optional
+  `binary` field. The executor now emits binary metadata alongside every `running`/
+  `success` status event via a new `itemsToBinaryPreview` helper, which — for
+  `image/*`/`application/pdf` attachments under a 512 KB cap — includes the actual
+  base64 so the UI can render a real thumbnail, and metadata-only otherwise (keeping
+  socket payloads small for everything else). Threaded through
+  `CanvasPage.tsx` (`lastRunBinary` on node data) → `FlowNode.tsx` →
+  `NodeInspectPopover.tsx`, which now renders a thumbnail for images, an "Open" link to a
+  `data:` URL for small PDFs, or a generic file chip (name/mimeType/size) otherwise,
+  above the existing Input/Output JSON view.
+- **Palette + config panel** — added to `nodeTypeMeta.ts` (Data category) and
+  `NodeConfigPanel.tsx`'s param hints.
+
+### Not done in this pass
+
+No dedicated binary-upload UI (a workflow gets binary data from an upstream node — HTTP
+response, email attachment, RAG loader — not from a file picker on the canvas itself,
+same as n8n). Large-file handling still inlines base64 in Postgres via the existing
+`BinaryData.data`/`directRef` shape; `directRef` (an id into an external object store) was
+already modeled for this but has no backing store wired up yet — still base64-only in
+practice.
+
+### Verified
+
+Brace/paren-balance and manual read-through of every touched/added file (no live
+`pnpm install`/`tsc -b` in this sandbox — same networking limitation as every prior phase;
+`registry.npmjs.org` is reachable but the workspace `link:`/`workspace:*` protocol isn't
+resolvable via plain `npm install`). Run `pnpm install && pnpm -r build` before deploying.
+
+## Operations & collaboration polish (Phase 10 depth pass)
+
+Four smaller pieces of production/collaboration polish, on top of what Phases 1-9 already
+shipped:
+
+**Workspace-wide execution log streaming.** `LogStreamConfig`
+(`00000000000010_log_streams_presence` migration) is a new, separate table from the
+per-workflow, finish-only `AlertConfig`: an org owner/admin registers a target URL once
+per workspace, and every execution's `started`/`completed`/`failed` event across *every*
+workflow in that workspace gets forwarded to it — meant for piping into Datadog, Sentry,
+Slack, or a custom collector. Dispatch happens from the worker
+(`dispatchLogStreamEvent` in `apps/worker/src/utils/alerts.ts`), fired at the same three
+points in `apps/worker/src/engine/executor.ts` (`executeWorkflow`, `resumeExecution`,
+`retryFromNode`) where the execution-status Socket.IO events already fire, filtered
+per-target by its subscribed `eventTypes`. Configured from the Workspaces page
+(`apps/web/src/components/LogStreamsPanel.tsx`), gated to `admin`+ the same way member
+management is.
+
+**Live presence: viewer avatars + cursors.** The Socket.IO server
+(`apps/api/src/realtime/socket.ts`) now has a second room type,
+`workflow:${workflowId}`, that any collaborator with canvas access can join — distinct
+from the per-owner `user:${userId}` room used for execution-status events. Joining
+broadcasts an updated viewer list (`presence:viewers`) with a stable per-user color, and
+`presence:cursor` relays throttled (~60ms) cursor positions expressed as a 0-1 fraction of
+the canvas pane's width/height, so positions stay meaningful across viewers with different
+window sizes without needing the full ReactFlow screen→flow coordinate transform on the
+server. The canvas page renders a Google-Docs-style avatar stack in the header and labeled
+cursor dots over the pane. Presence state is in-memory per API process — fine for a single
+instance; scaling the API horizontally would need this moved to Redis, same pattern as the
+execution-status pub/sub.
+
+**Switch node: visual case reordering + fallback toggle.** `switchNode.ts`
+(`apps/worker/src/nodes/switchNode.ts`) always matched cases in array order, first match
+wins, with an optional `default` fallback — but the only way to reorder or add cases was
+hand-editing the raw params JSON. `SwitchCasesEditor.tsx`, embedded in `NodeConfigPanel`
+above the JSON box for `switch` nodes, adds up/down buttons per case (order *is* priority),
+add/remove, and an explicit toggle for whether the `default` fallback route is exposed.
+
+**Marketplace: install-by-name + real update indicator.** The install endpoint
+(`POST /marketplace/install`) already accepted any public npm package name — the gap was
+that the UI only surfaced the curated index. `MarketplacePage.tsx` now has a direct
+"Install by npm package name" form up top, plus a new `GET /marketplace/latest/:name`
+endpoint that checks the latest published npm version *without* installing; "Check for
+updates" on an installed package now shows a real `update available: vX` badge and a
+separate `Update to vX` confirm button, instead of blindly reinstalling `latest` on click.
+
+
+
+Goal: let a user save sample trigger inputs + expected outputs per workflow, run the
+workflow against each case, and see pass/fail — plus a lightweight evaluation mode for
+AI-heavy (agent/openai/RAG) workflows whose output won't be byte-identical between runs.
+
+### What changed
+
+- **Schema**: `WorkflowTestCase` (migration `00000000000009_workflow_test_cases`) — per-
+  workflow `{ name, input, expectedOutput, scorer, passThreshold }`.
+- **`apps/api/src/utils/testScoring.ts`** *(new)* — a plain function map (not a class
+  hierarchy, so a new scorer is one more entry — the "pluggable scorer function" the
+  phase brief asked for), with four scorers:
+  - `jsonDiff` (default) — deep-equal structural comparison, with a shallow
+    added/removed/changed diff for the results UI when it fails.
+  - `exactString` — stringified output must equal `expectedOutput` exactly.
+  - `contains` — stringified output must contain `expectedOutput` as a substring.
+  - `similarity` — **the AI-evaluation-mode scorer**: dependency-free bag-of-words
+    Jaccard similarity against a `passThreshold` (default 0.7), for scoring
+    AI-generated text without an extra embeddings call per test run.
+- **`apps/api/src/routes/workflowTests.ts`** *(new)* — CRUD for test cases
+  (`GET/POST /workflows/:id/tests`, `PATCH/DELETE /workflows/:id/tests/:testId`) plus
+  `POST /workflows/:id/tests/run` (optionally scoped to specific `testCaseIds`), which
+  enqueues one real BullMQ execution per case (`triggerType: 'test'` — added to
+  `ExecutionJobData` in `packages/shared-types` so these runs are distinguishable from
+  manual/webhook/schedule runs in Execution History), waits for each via
+  `job.waitUntilFinished` (same `QueueEvents` pattern `nodeTest.ts` already used for
+  single-node test runs), and scores the workflow's final leaf output against the case's
+  `expectedOutput`.
+- **`apps/web/src/pages/WorkflowTestsPage.tsx`** *(new)*, at `/workflows/:id/tests` — add/
+  edit/delete test cases (JSON input editor, scorer picker, a pass-threshold field that
+  only appears for the `similarity` scorer), a "Run tests" button that runs every case (or
+  "Run" on a single row), pass/fail badges, a passing-count summary, and an expected-vs-
+  actual + diff view per result with a link through to that run's entry in Execution
+  History. Linked from the canvas toolbar (next to History), the ⌘K command palette, and
+  Execution History's header.
+
+### Not done in this pass
+
+Test cases run sequentially against the live (draft) graph, not the *published* version —
+matches how manual "Run" already behaves, but means a test run doesn't independently
+validate what's actually live if a workflow has unpublished draft changes. No CI/webhook
+trigger for automatically re-running tests on save yet — call `POST .../tests/run`
+yourself (e.g. from a pre-publish hook) for now. The `similarity` scorer is intentionally
+simple (word-overlap, not semantic/embedding similarity) per the phase brief's "simple
+string/JSON similarity to start" — swapping in a real embedding-based scorer later is a
+drop-in addition to `SCORERS` in `testScoring.ts`.
+
+### Verified
+
+Brace/paren-balance check and manual read-through of every touched/added file. Same
+sandbox limitation as every prior phase — no live `pnpm install`/`tsc -b`/`vitest` here;
+run `pnpm install && pnpm -r build` (and add real test coverage for `testScoring.ts`'s
+scorers and the run-endpoint's job-wait/scoring flow) before deploying.
+
+
+
+Continuing the n8n/Make.com UI-parity pass. Scope: give the `$vars` variables system and
+the (already-real) draft/publish version history a proper settings surface, and wire up
+the Error Workflow field that existed in the schema/executor but had no UI.
+
+### What changed
+
+- **`apps/web/src/pages/VariablesPage.tsx`** *(new)* — settings page at `/variables`
+  (added to `AppShell`'s nav and, via the shared `links` array, to the ⌘K command
+  palette automatically). Lists instance-wide variables plus a per-workspace tab; create/
+  edit/delete against the existing `apps/api/src/routes/variables.ts` endpoints (no API
+  changes needed — they already supported everything this page needed). Values are
+  masked behind a dot-mask by default with a per-row **Reveal** toggle, matching the
+  credentials page's convention for anything secret-shaped. Workspace tabs show that
+  workspace's own variables plus a read-only "inherited from instance" list so it's clear
+  which `{{$vars.KEY}}` a workflow in that workspace will actually resolve to (workspace
+  value wins on key collision, same precedence the worker already used).
+- **`apps/web/src/components/CollabPanel.tsx`** — added a fifth **Settings** tab
+  alongside the existing Versions/Comments/Alerts/Activity tabs (reusing that slide-over
+  rather than adding a new modal). It has one control for now: a dropdown to pick this
+  workflow's **Error workflow** from the user's other workflows, writing `errorWorkflowId`
+  via the existing `PUT /workflows/:id` (already accepted this field — see
+  `workflowUpdateSchema` in `apps/api/src/routes/workflows.ts` — it just had no UI path to
+  set it). The tab documents exactly what the error workflow receives as its trigger
+  payload — `{ failedWorkflowId, executionId, errorMessage }`, per
+  `dispatchErrorWorkflow()` in `apps/worker/src/engine/executor.ts` — including the
+  honest caveat that it does *not* get the failed node's own input/output inline; that
+  has to be looked up via the Executions API using `executionId` if needed. The canvas
+  toolbar button that opens this panel was renamed from "Versions & Comments" to
+  "Versions, Comments & Settings" so the new tab is discoverable.
+- **Version history itself needed no new work** — `CollabPanel`'s existing Versions tab
+  already lists every draft/published `WorkflowVersion`, computes an added/removed/
+  changed diff between any two versions via `GET /workflows/:id/versions/diff`, and can
+  publish or roll back to any version. The Phase 6 brief asked for this as new work, but
+  tracing it against `workflowVersionsRouter` and `CollabPanel.tsx` showed it was already
+  shipped in an earlier pass — flagged here rather than rebuilt to avoid a duplicate,
+  drifting second implementation.
+
+### Verified
+
+Parser-level syntax check (TypeScript's source-file parser) on every file touched or
+added in this pass — zero parse errors. `pnpm install && pnpm -F @flowforge/web build`
+still needed in a real dev environment for a full type-check (same sandbox networking
+limitation noted in the Phase 3/4/5 passes above — this environment cannot resolve the
+`@flowforge/shared-types` workspace link via `pnpm install`).
+
+## Credential UX overhaul (Phase 5 depth pass)
+
+Triggered by a concrete bug report: a node's credential dropdown always showed "None",
+even after the user tried to attach one. Root-caused to two separate issues rather than
+one bug:
+
+1. **`CredentialsPage.tsx` only supported creating 5 of the 10 credential types** the
+   built-in nodes actually read (`slack`, `httpBearer`, `email`, `googleSheets`, `openai`
+   — but not `discord`, `telegram`, `notion`, `github`, or `postgres`, even though
+   `moreIntegrations.ts` implements all five and `NodeConfigPanel.tsx` already listed them
+   as credential-requiring node types). For those five, there was no way to create a
+   working credential through the UI at all.
+2. **The node config panel's credential picker had no path to create a credential
+   inline** — a user had to leave the canvas, go to `/credentials`, create one (assuming
+   its type was even supported, per #1), then come back and manually re-select it. Any
+   node type with zero existing credentials was permanently stuck at "None".
+
+### What changed
+
+- **`apps/web/src/lib/credentialSchemas.ts`** *(new)* — single source of truth for all 10
+  credential types, their exact field names (cross-checked against every worker node's
+  `credential?.xyz` reads, e.g. `discord.webhookUrl`, `telegram.botToken`,
+  `postgres.connectionString`), display labels/colors, and a `nodeType → credentialType`
+  map so the node panel knows exactly which credential type a given node needs.
+- **`apps/web/src/components/CredentialQuickCreateModal.tsx`** *(new)* — inline
+  "+ New credential…" flow launched directly from a node's credential dropdown, pre-locked
+  to the type that node requires, saves via the existing `POST /credentials` API, and
+  immediately selects the new credential on the node — no page navigation.
+- **`apps/web/src/components/CredentialFieldsForm.tsx`** *(new)* — the labeled-field
+  renderer, shared by `CredentialsPage.tsx` and the new modal so they can never drift out
+  of sync.
+- **`apps/api/src/utils/credentialTest.ts`** — added live "Test connection" checks for
+  `discord`, `telegram`, `notion`, `github`, `postgres` (previously only 4 of the 10 types
+  had a real check; the rest silently returned "no test defined").
+- **`apps/web/src/components/NodeConfigPanel.tsx`** — credential dropdown now shows the
+  credential's name + a ✓/⚠ status marker, lists type-matching credentials first, and adds
+  a **"🔌 Test connection"** button that calls the test endpoint without leaving the
+  canvas and refreshes the picker/canvas status in place.
+- **`apps/web/src/lib/nodeTypeMeta.ts`** *(new)* — single source of truth for every node
+  type's icon/category/accent color.
+- **`apps/web/src/components/NodePalette.tsx`** — rebuilt from a plain text list into a
+  categorized, colored icon-tile grid (Make.com-style app picker) sourced from
+  `nodeTypeMeta.ts`.
+- **`apps/web/src/components/FlowNode.tsx`** — canvas nodes now render the same colored
+  icon swatch as the palette, plus a small credential-status dot (amber = required
+  credential not attached, green = attached) driven by the same
+  `NODE_TYPE_TO_CREDENTIAL_TYPE` map used by the node panel.
+- **`apps/web/src/pages/CredentialsPage.tsx`** — refactored onto the shared schema (so it
+  now also supports creating the 5 previously-missing credential types), added a colored
+  type-icon badge per credential in the list, and colored dots on the OAuth "Connect
+  with…" buttons.
+
+### Known gap, called out rather than hidden
+
+Self-service OAuth is still **not** implemented — "Connect with Google/Slack/GitHub"
+still requires a server admin to set `GOOGLE_OAUTH_CLIENT_ID` (etc.) in `.env`; there is
+no in-app way for a workspace to register its own OAuth app yet. The button correctly
+disables itself with an explanatory tooltip when unconfigured rather than silently
+failing, but the underlying capability — an org-level OAuth app settings page backed by a
+new encrypted-config table — has not been built. Scoped as a follow-up, not done here.
+
+No `node_modules` were installed while making these changes (this sandbox has no network
+access), so they were verified by manual trace of every new import/prop/type through the
+touched files rather than a live `tsc -b`/`vite build`. Run `pnpm install && pnpm -r
+typecheck` before deploying.
+
+## Execution/debugging parity with n8n (Phase 3 — this round)
+
+Goal: live execution view that highlights the active node, animates the running edge,
+and lets you inspect each node's input/output JSON as (or after) a run happens, plus
+per-node timing/item-count badges — on top of the existing final-state
+`ExecutionHistoryPage.tsx`, which is unchanged and still the place to review past runs.
+
+### What changed
+
+- **`apps/worker/src/engine/executor.ts`** — `StatusEmitter` now carries `input`,
+  `durationMs`, and `itemCount` alongside the existing `output`/`error`. Every node's
+  `running` emit includes its resolved input items and item count; every `success`/
+  `failed` emit includes wall-clock duration (`Date.now()` captured at the start of
+  `processNode`) and the resulting item count. Pin Data and `continueOnFail` soft-success
+  paths are covered too, so a pinned or soft-failed node still gets a badge.
+- **`apps/worker/src/pubsub/publisher.ts`** — `StatusMessage` extended with the same
+  `input`/`durationMs`/`itemCount` fields (the worker already spreads the emitted event
+  into `publishStatus`, so no call-site changes were needed beyond the type).
+- **`apps/api/src/realtime/socket.ts`** — the Redis→Socket.IO relay's parsed event type
+  extended to match; it already forwards the whole event object, so the new fields reach
+  the browser for free.
+- **`apps/web/src/components/NodeInspectPopover.tsx`** *(new)* — n8n-style popover with
+  Input/Output tabs (Error tab replaces Output on a failed node), duration, item count,
+  and status, opened from a node's data badge.
+- **`apps/web/src/components/FlowNode.tsx`** — nodes now show a small clickable badge
+  under the label once they've run: `⏳ running…` while active, or `NNms · N items` (styled
+  red with `· error` on failure) once settled. Clicking it toggles `NodeInspectPopover`
+  for that node. `FlowNodeData` gained `lastRunInput/Output/Error/DurationMs/ItemCount`.
+  (Also made `nodeType`/`status` optional on `FlowNodeData` to fix a pre-existing type
+  error where sticky-note/group canvas nodes — which don't carry those fields — couldn't
+  satisfy `Node<FlowNodeData>[]`; `FlowNode` now defaults `status` to `'idle'` and handles
+  a missing `nodeType` gracefully instead of relying on the type system to paper over it.)
+- **`apps/web/src/pages/CanvasPage.tsx`** — the execution socket handlers now stash
+  `input`/`output`/`durationMs`/`itemCount` onto the relevant node's data on
+  `node:started`/`node:completed`/`node:failed`, and `execution:started` clears all of
+  that state for a fresh run. Edges leaving the currently-active node are set `animated:
+  true` with a signal-colored stroke while that node runs, and un-animated again once it
+  settles or the run ends — giving the "flow moving along the wire" effect from n8n's
+  live view. The existing pin-data badge (📌) on `FlowNode` was already in place from an
+  earlier round and is untouched.
+
+### Not done in this pass
+
+Per-node "Pin data" visual indicator and the credential-status dot were already shipped
+in earlier phases and are unchanged here. `ExecutionHistoryPage.tsx` (the after-the-fact
+history view) was intentionally left alone — Phase 3 only adds the *live* overlay on the
+canvas; consolidating the two views is a reasonable future follow-up but wasn't asked for.
+
+### Verified
+
+This round *was* built and typechecked with a live `pnpm install` (network available in
+this environment): `packages/shared-types`, `apps/worker`, and `apps/api` all pass
+`tsc -p tsconfig.json` (or `tsc -b`) with zero errors, and `apps/web` passes both `tsc -b`
+and a production `vite build` (`dist/` output, 636 kB main bundle, no build errors — the
+one warning is Vite's standard "chunk >500kB" advisory, not an error). No test files
+target the touched modules yet; existing `vitest` suites were left untouched and not
+re-run in this pass.

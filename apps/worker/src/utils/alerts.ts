@@ -68,6 +68,66 @@ export async function dispatchExecutionAlerts(
   }
 }
 
+interface LogStreamConfigRow {
+  id: string;
+  targetUrl: string;
+  eventTypes: string[];
+  headers: Record<string, string> | null;
+}
+
+/**
+ * Forwards a single execution event (started/completed/failed) to every
+ * active LogStreamConfig on the workflow's workspace that subscribes to
+ * that event type. This is the workspace-wide operational feed — separate
+ * from dispatchExecutionAlerts, which is per-workflow and only fires once
+ * a run finishes. Never throws.
+ */
+export async function dispatchLogStreamEvent(
+  workspaceId: string | null | undefined,
+  event: {
+    workflowId: string;
+    executionId: string;
+    status: 'started' | 'completed' | 'failed';
+    error?: string | null;
+  }
+): Promise<void> {
+  if (!workspaceId) return;
+  try {
+    const configResult = await pool.query(
+      `SELECT id, "targetUrl", "eventTypes", headers FROM "LogStreamConfig"
+       WHERE "workspaceId" = $1 AND "isActive" = true`,
+      [workspaceId]
+    );
+    const configs: LogStreamConfigRow[] = configResult.rows;
+    const toFire = configs.filter((c) => (c.eventTypes ?? []).includes(event.status));
+    if (toFire.length === 0) return;
+
+    await Promise.all(
+      toFire.map((config) =>
+        axios
+          .post(
+            config.targetUrl,
+            {
+              event: `workflow.${event.status}`,
+              workspaceId,
+              workflowId: event.workflowId,
+              executionId: event.executionId,
+              status: event.status,
+              error: event.error ?? null,
+              timestamp: new Date().toISOString(),
+            },
+            { headers: config.headers ?? undefined, timeout: 10_000 }
+          )
+          .catch((err) =>
+            console.error(`[log-stream] failed to deliver to ${config.targetUrl}`, err.message ?? err)
+          )
+      )
+    );
+  } catch (err) {
+    console.error('[log-stream] failed to dispatch log stream event', err);
+  }
+}
+
 async function deliverAlert(
   config: AlertConfigRow,
   payload: {

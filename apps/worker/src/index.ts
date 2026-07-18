@@ -65,7 +65,7 @@ const worker = new Worker<QueueJobData>(
       return result;
     }
 
-    const { workflowId, triggerType, triggerPayload } = job.data as ExecutionJobData;
+    const { workflowId, triggerType, triggerPayload, executionId } = job.data as ExecutionJobData;
     const workflow = await getWorkflow(workflowId);
     if (!workflow) {
       throw new Error(`Workflow ${workflowId} not found`);
@@ -85,7 +85,9 @@ const worker = new Worker<QueueJobData>(
         publishStatus({ workflowId, ...event }).catch((err) =>
           console.error('Failed to publish status event', err)
         );
-      }
+      },
+      0,
+      executionId
     );
 
     return result;

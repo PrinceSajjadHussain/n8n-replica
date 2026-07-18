@@ -9,6 +9,9 @@ export interface WorkflowRow {
   nodesJson: unknown;
   edgesJson: unknown;
   isActive: boolean;
+  errorWorkflowId?: string | null;
+  workspaceId?: string | null;
+  staticData?: Record<string, unknown> | null;
 }
 
 export async function getWorkflow(workflowId: string): Promise<WorkflowRow | null> {
@@ -16,11 +19,50 @@ export async function getWorkflow(workflowId: string): Promise<WorkflowRow | nul
   return result.rows[0] ?? null;
 }
 
+/**
+ * Workflow "static data" — a small persisted JSON blob per workflow,
+ * n8n's `$getWorkflowStaticData()` equivalent: lightweight state (e.g. "last
+ * processed id") that survives between runs without needing a full Data
+ * Table or external DB credential. Read/written from the Code node — see
+ * `nodes/codeNode.ts` — and readable from any node's params via the
+ * `{{$staticData.KEY}}` expression.
+ */
+export async function getWorkflowStaticData(workflowId: string): Promise<Record<string, unknown>> {
+  const result = await pool.query(`SELECT "staticData" FROM "Workflow" WHERE id = $1`, [workflowId]);
+  return (result.rows[0]?.staticData as Record<string, unknown>) ?? {};
+}
+
+export async function setWorkflowStaticData(workflowId: string, data: Record<string, unknown>): Promise<void> {
+  await pool.query(`UPDATE "Workflow" SET "staticData" = $2 WHERE id = $1`, [workflowId, JSON.stringify(data ?? {})]);
+}
+
+/**
+ * All variables visible to a workflow (global + its workspace's), flattened
+ * into a key->value map for the `$vars` expression context. Workspace-scoped
+ * values win over a global variable of the same key.
+ */
+export async function getVariablesMapForWorkflow(workflowId: string): Promise<Record<string, string>> {
+  const result = await pool.query(
+    `SELECT v.key, v.value
+     FROM "Variable" v
+     WHERE v."workspaceId" IS NULL
+        OR v."workspaceId" = (SELECT "workspaceId" FROM "Workflow" WHERE id = $1)
+     ORDER BY v."workspaceId" NULLS FIRST`,
+    [workflowId]
+  );
+  const map: Record<string, string> = {};
+  for (const row of result.rows as { key: string; value: string }[]) {
+    map[row.key] = row.value;
+  }
+  return map;
+}
+
 export async function createExecution(
   workflowId: string,
-  triggerType: 'manual' | 'webhook' | 'schedule' | 'emailTrigger' | 'fileWatcher' | 'databaseChange' | 'streamTrigger'
+  triggerType: 'manual' | 'webhook' | 'schedule' | 'emailTrigger' | 'fileWatcher' | 'databaseChange' | 'streamTrigger',
+  presetId?: string
 ): Promise<string> {
-  const id = randomUUID();
+  const id = presetId ?? randomUUID();
   await pool.query(
     `INSERT INTO "Execution" (id, "workflowId", status, "triggerType") VALUES ($1, $2, 'running', $3)`,
     [id, workflowId, triggerType]

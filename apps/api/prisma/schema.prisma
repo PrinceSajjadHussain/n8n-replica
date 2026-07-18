@@ -16,6 +16,7 @@ model User {
   credentials  Credential[]
   folders      CredentialFolder[]
   sharedWithMe CredentialShare[]
+  sharedWorkflowsWithMe WorkflowShare[]
 
   ownedWorkspaces   Workspace[]
   workspaceMembers  WorkspaceMember[]
@@ -43,6 +44,21 @@ model Workflow {
   workspaceId String?
   folderId    String?
 
+  /// If set, this workflow auto-runs whenever THIS workflow's execution
+  /// fails, receiving { failedWorkflowId, executionId, errorMessage, nodeId }
+  /// as its trigger payload (n8n-style "Error Workflow").
+  errorWorkflowId String?
+
+  /// Last JSON body used to manually run this workflow, so the "test
+  /// workflow" panel keeps its payload across editor sessions.
+  lastManualTestPayload Json?
+
+  /// Small persisted JSON blob for lightweight state between runs (e.g.
+  /// "last processed id"), read/written via $getWorkflowStaticData() /
+  /// $setWorkflowStaticData() in the Code node and {{$staticData.KEY}} in
+  /// any node's params.
+  staticData Json @default("{}")
+
   user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   executions Execution[]
   versions   WorkflowVersion[]
@@ -51,10 +67,92 @@ model Workflow {
   comments   WorkflowComment[]
   activityLogs ActivityLog[]
   alertConfigs AlertConfig[]
+  errorWorkflow    Workflow?  @relation("ErrorWorkflow", fields: [errorWorkflowId], references: [id], onDelete: SetNull)
+  workflowsUsingMeAsErrorHandler Workflow[] @relation("ErrorWorkflow")
+  tags       WorkflowTag[]
+  shares     WorkflowShare[]
+  testCases  WorkflowTestCase[]
 
   @@index([userId])
   @@index([workspaceId])
   @@index([folderId])
+  @@index([errorWorkflowId])
+}
+
+/// Instance- or workspace-scoped key/value store, referenced in node
+/// expressions as {{$vars.KEY}}. A null workspaceId is a global variable
+/// visible to every workflow; a non-null workspaceId scopes it to that
+/// workspace only.
+model Variable {
+  id          String    @id @default(uuid())
+  workspaceId String?
+  key         String
+  value       String
+  createdBy   String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+/// A named label, scoped to a workspace (or global if workspaceId is null),
+/// attached to workflows many-to-many via WorkflowTag.
+model Tag {
+  id          String   @id @default(uuid())
+  workspaceId String?
+  name        String
+  createdAt   DateTime @default(now())
+
+  workspace Workspace?    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workflows WorkflowTag[]
+
+  @@index([workspaceId])
+}
+
+model WorkflowTag {
+  workflowId String
+  tagId      String
+
+  workflow Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  tag      Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([workflowId, tagId])
+  @@index([tagId])
+}
+
+/// A lightweight built-in key-value/tabular store, scoped to a workspace —
+/// Make's "Data Store" / n8n's newer "Data Tables" equivalent, so a
+/// workflow can persist simple state without an external DB credential.
+/// `columns` is a loose JSON schema (array of {name, type}) the API
+/// validates rows against; rows themselves are free-form JSONB.
+model DataTable {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  columns     Json     @default("[]")
+  createdBy   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  rows      DataTableRow[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+}
+
+model DataTableRow {
+  id          String   @id @default(uuid())
+  dataTableId String
+  data        Json     @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  dataTable DataTable @relation(fields: [dataTableId], references: [id], onDelete: Cascade)
+
+  @@index([dataTableId])
 }
 
 enum WorkspaceRole {
@@ -83,6 +181,10 @@ model Workspace {
   folders   WorkflowFolder[]
   workflows Workflow[]
   activityLogs ActivityLog[]
+  variables Variable[]
+  tags      Tag[]
+  dataTables DataTable[]
+  logStreamConfigs LogStreamConfig[]
 
   @@index([ownerId])
 }
@@ -169,6 +271,27 @@ model AlertConfig {
   workflow Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
 
   @@index([workflowId])
+}
+
+/// Org-owner-level operational log streaming: forwards workflow execution
+/// events (started/completed/failed) across the whole workspace to an
+/// external endpoint (Datadog, Sentry, Slack, a custom collector, ...).
+/// Distinct from AlertConfig, which is per-workflow and finish-only.
+model LogStreamConfig {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  targetUrl   String
+  eventTypes  Json     @default("[\"started\", \"completed\", \"failed\"]")
+  isActive    Boolean  @default(true)
+  headers     Json?
+  createdBy   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
 }
 
 /// One immutable snapshot per save/publish, enabling rollback and diffing.
@@ -267,6 +390,26 @@ model CredentialShare {
   @@index([sharedWithUserId])
 }
 
+/// Direct, per-user workflow share — independent of workspace membership.
+/// Role uses the same rank as WorkspaceRole ('viewer' < 'editor' < 'admin');
+/// the real owner is still Workflow.userId — transferring ownership updates
+/// that column directly (see transferWorkflowOwnership) rather than granting
+/// an 'owner' row here.
+model WorkflowShare {
+  id               String   @id @default(uuid())
+  workflowId       String
+  sharedWithUserId String
+  role             String   @default("viewer")
+  createdAt        DateTime @default(now())
+
+  workflow       Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  sharedWithUser User     @relation(fields: [sharedWithUserId], references: [id], onDelete: Cascade)
+
+  @@unique([workflowId, sharedWithUserId])
+  @@index([sharedWithUserId])
+  @@index([workflowId])
+}
+
 enum ExecutionStatus {
   running
   success
@@ -322,4 +465,30 @@ model ExecutionNodeRun {
 
   @@index([executionId])
   @@index([nodeId])
+}
+
+/// A saved sample-input/expected-output pair for a workflow, used by the
+/// "Run tests" action (WorkflowTestsPage.tsx). `scorer` picks how the
+/// actual run output is compared against `expectedOutput`:
+///   - "jsonDiff":  deep-equal structural comparison (default)
+///   - "exactString": stringified output must equal expectedOutput exactly
+///   - "contains":  stringified output must contain expectedOutput as a substring
+///   - "similarity": token-overlap similarity score against expectedOutput,
+///                   must meet `passThreshold` (0-1, default 0.7) — the
+///                   lightweight "AI evaluation mode" scorer for agent/
+///                   RAG/openai nodes whose output isn't byte-exact.
+model WorkflowTestCase {
+  id             String   @id @default(uuid())
+  workflowId     String
+  name           String
+  input          Json     @default("{}")
+  expectedOutput Json     @default("{}")
+  scorer         String   @default("jsonDiff")
+  passThreshold  Float    @default(0.7)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  workflow Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@index([workflowId])
 }

@@ -10,7 +10,12 @@ export interface StatusMessage {
   nodeId?: string;
   status: string;
   output?: unknown;
+  input?: unknown;
   error?: string;
+  /** Wall-clock ms the node spent running; set on success/failed emits. */
+  durationMs?: number;
+  /** Number of items in the node's output items array, when known. */
+  itemCount?: number;
 }
 
 export async function publishStatus(message: StatusMessage): Promise<void> {

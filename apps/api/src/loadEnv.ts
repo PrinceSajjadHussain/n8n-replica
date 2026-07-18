@@ -41,7 +41,7 @@ if (!(explicit && tryLoad(explicit))) {
 
 // Development-friendly defaults if still unset and known dev ports are used
 if (!process.env.REDIS_URL) {
-  process.env.REDIS_URL = 'redis://localhost:6380';
+  process.env.REDIS_URL = 'redis://localhost:6379';
 }
 if (!process.env.DATABASE_URL) {
   process.env.DATABASE_URL = 'postgresql://postgres:postgres@localhost:5433/flowforge?schema=public';

@@ -1,0 +1,55 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---- Theme tokens: black (default), blue, white ---- */
+:root,
+[data-theme='black'] {
+  color-scheme: dark;
+  --color-canvas: 13 17 23;      /* #0d1117 */
+  --color-panel: 21 27 35;       /* #151b23 */
+  --color-panel-border: 34 41 51; /* #222933 */
+  --color-signal: 61 220 151;    /* #3ddc97 */
+  --color-signal-soft: 61 220 151;
+  --color-ink: 230 237 243;      /* #e6edf3 */
+  --color-muted: 139 148 158;    /* #8b949e */
+}
+
+[data-theme='blue'] {
+  color-scheme: dark;
+  --color-canvas: 8 15 30;        /* deep navy */
+  --color-panel: 15 26 48;
+  --color-panel-border: 32 51 87;
+  --color-signal: 56 152 255;     /* electric blue accent */
+  --color-signal-soft: 56 152 255;
+  --color-ink: 226 236 252;
+  --color-muted: 138 158 191;
+}
+
+[data-theme='white'] {
+  color-scheme: light;
+  --color-canvas: 246 248 251;    /* soft white */
+  --color-panel: 255 255 255;
+  --color-panel-border: 224 229 236;
+  --color-signal: 22 163 138;     /* teal-green accent, legible on white */
+  --color-signal-soft: 22 163 138;
+  --color-ink: 17 24 39;
+  --color-muted: 100 112 131;
+}
+
+body {
+  @apply bg-canvas text-ink font-body;
+  margin: 0;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+::selection {
+  background: rgb(var(--color-signal) / 0.25);
+}
+
+.focus-ring:focus-visible {
+  outline: 2px solid rgb(var(--color-signal));
+  outline-offset: 2px;
+}

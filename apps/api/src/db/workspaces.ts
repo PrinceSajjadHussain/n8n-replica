@@ -128,19 +128,30 @@ export async function removeMember(workspaceId: string, userId: string): Promise
   return (result.rowCount ?? 0) > 0;
 }
 
-/** The role a user has on a workflow, derived from workspace membership (or 'owner' via the legacy userId column). */
+/**
+ * The role a user has on a workflow: the real owner (Workflow.userId) always
+ * gets 'owner'; otherwise the higher of their workspace-membership role and
+ * any direct WorkflowShare grant wins (a workflow shared directly at
+ * 'admin' should count even for a user with only 'viewer' in the workspace,
+ * and vice versa).
+ */
 export async function getWorkflowRole(workflowId: string, userId: string): Promise<WorkspaceRole | null> {
   const result = await pool.query(
-    `SELECT wf."userId" AS "legacyOwnerId", m.role
+    `SELECT wf."userId" AS "legacyOwnerId", m.role AS "workspaceRole", ws.role AS "shareRole"
      FROM "Workflow" wf
      LEFT JOIN "WorkspaceMember" m ON m."workspaceId" = wf."workspaceId" AND m."userId" = $2
+     LEFT JOIN "WorkflowShare" ws ON ws."workflowId" = wf.id AND ws."sharedWithUserId" = $2
      WHERE wf.id = $1`,
     [workflowId, userId]
   );
   const row = result.rows[0];
   if (!row) return null;
   if (row.legacyOwnerId === userId) return 'owner';
-  return row.role ?? null;
+  const workspaceRole = (row.workspaceRole ?? null) as WorkspaceRole | null;
+  const shareRole = (row.shareRole ?? null) as WorkspaceRole | null;
+  if (!workspaceRole) return shareRole;
+  if (!shareRole) return workspaceRole;
+  return ROLE_RANK[shareRole] >= ROLE_RANK[workspaceRole] ? shareRole : workspaceRole;
 }
 
 // --- Folders ---

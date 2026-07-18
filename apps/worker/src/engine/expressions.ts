@@ -8,6 +8,9 @@ import { randomUUID, createHash } from 'crypto';
  *   {{$node["Label"].json.field}}  -> output of a previously-run node, by label
  *   {{$env.NAME}}                  -> process.env.NAME
  *   {{$workflow.id}} / {{$execution.id}}
+ *   {{$vars.NAME}}                  -> value from the global/workspace Variables store
+ *   {{$staticData.NAME}}            -> value from this workflow's persisted static-data blob
+ *                                      (see $getWorkflowStaticData()/$setWorkflowStaticData() in the Code node)
  *   {{$now}}  -> ISO timestamp    {{$today}} -> YYYY-MM-DD
  *   {{$item.field}}                -> current item (inside forEach)
  *   {{$binary.data.mimeType}}      -> metadata (mimeType/fileName/fileSize) of binary
@@ -26,6 +29,10 @@ export interface ExpressionContext {
   workflow: { id: string };
   execution: { id: string };
   nodesByLabel: Record<string, { json: unknown; binary?: unknown }>;
+  /** Global/workspace Variables store, keyed by name — see {{$vars.NAME}}. */
+  vars: Record<string, string>;
+  /** This workflow's persisted static-data blob ($getWorkflowStaticData() equivalent) — see {{$staticData.KEY}}. */
+  staticData: Record<string, unknown>;
   item?: unknown; // current loop item, if inside a forEach
   /** Binary metadata (mimeType/fileName/fileSize — never the raw base64) for the current input item(s). */
   binary?: unknown;
@@ -61,6 +68,12 @@ function evalExpr(expr: string, ctx: ExpressionContext): unknown {
 
   m = trimmed.match(/^\$env\.(.+)$/);
   if (m) return ctx.env[m[1]];
+
+  m = trimmed.match(/^\$vars\.(.+)$/);
+  if (m) return ctx.vars[m[1]];
+
+  m = trimmed.match(/^\$staticData\.?(.*)$/);
+  if (m) return getPath(ctx.staticData, m[1]);
 
   m = trimmed.match(/^\$node\["([^"]+)"\]\.json\.?(.*)$/);
   if (m) {
