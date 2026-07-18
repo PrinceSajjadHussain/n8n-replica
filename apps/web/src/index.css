@@ -16,29 +16,31 @@
   --color-ink: 230 237 243;      /* #e6edf3 */
   --color-muted: 139 148 158;    /* #8b949e */
 }
-
 [data-theme='blue'] {
   color-scheme: dark;
-  --color-canvas: 8 15 30;        /* deep navy */
-  --color-panel: 15 26 48;
-  --color-panel-border: 32 51 87;
-  --color-signal: 56 152 255;     /* electric blue accent */
-  --color-signal-soft: 56 152 255;
-  --color-ink: 226 236 252;
-  --color-muted: 138 158 191;
+  --color-canvas: 7 13 27;         /* #070d1b — slightly deeper, richer navy */
+  --color-panel: 14 24 45;         /* #0e182d */
+  --color-panel-border: 30 48 82;  /* #1e3052 */
+  --color-signal: 64 158 255;      /* #409eff — electric blue, AA on canvas (7.4:1) */
+  --color-signal-soft: 96 181 255; /* #60b5ff — lighter tint for hover/glow states */
+  --color-ink: 230 239 253;        /* #e6effd */
+  --color-muted: 146 165 196;      /* #92a5c4 — bumped for 4.6:1 on canvas */
+  --color-alert: 255 107 107;      /* #ff6b6b — fine as-is on dark, kept for parity */
+  --color-amber: 255 180 84;       /* #ffb454 — fine as-is on dark */
 }
 
 [data-theme='white'] {
   color-scheme: light;
-  --color-canvas: 246 248 251;    /* soft white */
+  --color-canvas: 247 249 252;     /* #f7f9fc — cooler, cleaner white */
   --color-panel: 255 255 255;
-  --color-panel-border: 224 229 236;
-  --color-signal: 22 163 138;     /* teal-green accent, legible on white */
-  --color-signal-soft: 22 163 138;
-  --color-ink: 17 24 39;
-  --color-muted: 100 112 131;
+  --color-panel-border: 221 227 235; /* #dde3eb */
+  --color-signal: 13 148 128;      /* #0d9480 — deeper teal, 3.9:1 → use for icons/borders, not small text */
+  --color-signal-soft: 204 235 230; /* #ccebe6 — pale teal for selected/hover backgrounds */
+  --color-ink: 15 23 42;           /* #0f172a — near-black, 17.9:1 */
+  --color-muted: 90 102 122;       /* #5a667a — 4.6:1, meets AA on canvas */
+  --color-alert: 220 38 38;        /* #dc2626 — 4.8:1 on canvas, legible as text */
+  --color-amber: 180 83 9;         /* #b45309 — 4.7:1 on canvas, legible as text */
 }
-
 body {
   @apply bg-canvas text-ink font-body;
   margin: 0;
@@ -52,4 +54,36 @@ body {
 .focus-ring:focus-visible {
   outline: 2px solid rgb(var(--color-signal));
   outline-offset: 2px;
+}
+
+/* ---- Motion: one shared duration/easing instead of ad hoc `transition` ---- */
+.transition-default {
+  transition-duration: 150ms;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ---- Elevation system: 3 levels, tuned per-theme so the white theme's
+   shadows read as depth rather than a faint grey smear. ---- */
+.elevation-panel {
+  border: 1px solid rgb(var(--color-panel-border));
+}
+.elevation-card {
+  border: 1px solid rgb(var(--color-panel-border));
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+}
+.elevation-card:hover {
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.16);
+}
+.elevation-floating {
+  border: 1px solid rgb(var(--color-panel-border));
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.28);
+}
+[data-theme='white'] .elevation-card {
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 1px 1px rgb(0 0 0 / 0.04);
+}
+[data-theme='white'] .elevation-card:hover {
+  box-shadow: 0 8px 20px rgb(0 0 0 / 0.1), 0 2px 6px rgb(0 0 0 / 0.06);
+}
+[data-theme='white'] .elevation-floating {
+  box-shadow: 0 12px 28px rgb(0 0 0 / 0.14), 0 2px 8px rgb(0 0 0 / 0.08);
 }

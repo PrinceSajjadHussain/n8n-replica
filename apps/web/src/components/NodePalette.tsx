@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { NODE_TYPES, NODE_CATEGORIES, CATEGORY_META, type NodeTypeMeta } from '../lib/nodeTypeMeta';
+import NodeIcon from './NodeIcon';
 
 const RECENTLY_USED_KEY = 'flowforge:node-palette:recently-used';
 const RECENTLY_USED_LIMIT = 6;
@@ -51,10 +52,10 @@ function NodeTile({ node, onAdd }: { node: NodeTypeMeta; onAdd: (node: NodeTypeM
       className="focus-ring group flex flex-col items-center gap-1.5 p-2 rounded-lg hover:bg-canvas transition text-center"
     >
       <span
-        className="w-9 h-9 rounded-lg flex items-center justify-center text-base leading-none shadow-sm group-hover:scale-105 transition-transform"
+        className="w-9 h-9 rounded-lg flex items-center justify-center leading-none shadow-sm group-hover:scale-105 transition-transform"
         style={{ background: `${node.color}22`, color: node.color, border: `1px solid ${node.color}55` }}
       >
-        {node.icon}
+        <NodeIcon type={node.type} size={18} />
       </span>
       <span className="text-[10.5px] text-ink leading-tight line-clamp-2">{node.label}</span>
     </button>

@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api';
 import AppShell from '../components/AppShell';
 import EmptyState from '../components/EmptyState';
+import Badge from '../components/ui/Badge';
+import Card from '../components/ui/Card';
+import Button from '../components/ui/Button';
 import CredentialFieldsForm from '../components/CredentialFieldsForm';
 import {
   CREDENTIAL_TYPES,
@@ -375,7 +378,7 @@ export default function CredentialsPage() {
 
           <div className="grid gap-2">
             {visibleCredentials?.map((cred) => (
-              <div key={cred.id} className="bg-panel border border-panelBorder rounded-lg px-4 py-3">
+              <Card key={cred.id}>
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="flex items-center gap-2">
@@ -387,18 +390,14 @@ export default function CredentialsPage() {
                         {CREDENTIAL_TYPE_META[cred.type as CredentialType]?.letter ?? '?'}
                       </span>
                       <span className="font-medium text-sm">{cred.name}</span>
-                      <span className="text-[10px] uppercase tracking-wide text-muted border border-panelBorder rounded px-1.5 py-0.5">
+                      <Badge variant="neutral">
                         {CREDENTIAL_TYPE_META[cred.type as CredentialType]?.label ?? cred.type}
-                      </span>
-                      {cred.authType === 'oauth2' && (
-                        <span className="text-[10px] uppercase tracking-wide text-signal border border-signal/30 rounded px-1.5 py-0.5">
-                          OAuth2
-                        </span>
-                      )}
+                      </Badge>
+                      {cred.authType === 'oauth2' && <Badge variant="signal">OAuth2</Badge>}
                       {cred.access !== 'owner' && (
-                        <span className="text-[10px] uppercase tracking-wide text-muted border border-panelBorder rounded px-1.5 py-0.5">
+                        <Badge variant="neutral">
                           Shared by {cred.owner?.email} · {cred.access}
-                        </span>
+                        </Badge>
                       )}
                     </div>
                     <p className="text-muted text-xs mt-0.5">
@@ -418,17 +417,13 @@ export default function CredentialsPage() {
                     )}
                   </div>
                   <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => handleTest(cred.id)}
-                      disabled={testingId === cred.id}
-                      className="focus-ring text-xs border border-panelBorder rounded-md px-3 py-1.5 hover:bg-canvas transition disabled:opacity-50"
-                    >
+                    <Button variant="secondary" onClick={() => handleTest(cred.id)} loading={testingId === cred.id}>
                       {testingId === cred.id ? 'Testing…' : 'Test connection'}
-                    </button>
+                    </Button>
                     {cred.access === 'owner' && (
                       <button
                         onClick={() => setSharingCredential(cred)}
-                        className="focus-ring text-xs text-muted hover:text-signal transition"
+                        className="focus-ring text-xs text-muted hover:text-signal transition-default"
                       >
                         Share
                       </button>
@@ -436,14 +431,14 @@ export default function CredentialsPage() {
                     {cred.access === 'owner' && (
                       <button
                         onClick={() => handleDelete(cred.id)}
-                        className="focus-ring text-xs text-muted hover:text-alert transition"
+                        className="focus-ring text-xs text-muted hover:text-alert transition-default"
                       >
                         Delete
                       </button>
                     )}
                   </div>
                 </div>
-              </div>
+              </Card>
             ))}
             {visibleCredentials?.length === 0 && (
               <EmptyState

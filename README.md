@@ -507,16 +507,22 @@ memory + multi-agent orchestration + reasoning-trace UI — see "AI agents" abov
 `docs/ai-agents.md` — memory/vector-recall storage is still the JSON-on-disk store, not
 yet switched over to the pluggable vector-store layer RAG now uses). Variables and Error
 Workflow now have dedicated UI (see "Environment variables & version history UI (Phase 6
-depth pass)" below); Tags/test-payload are still real API + engine wiring with no
-dedicated panel yet — call the endpoints directly for now (same status as folders in the
-collaboration section).
+depth pass)" below); Tags now have a dedicated filter/create/attach UI on
+**Workflows** (see "Design system upgrade & n8n/Make.com feature parity (Phase 5 depth
+pass)" below) — test-payload is still real API + engine wiring with no dedicated panel
+yet — call the endpoint directly for now (same status as folders in the collaboration
+section).
 
 **Not started:** SSO/LDAP/SAML/RBAC/audit logs/rate limiting, a custom-node SDK CLI +
 hot-reload dev workflow (the marketplace covers *installing* community nodes; there's no
 scaffolding tool for *authoring* one yet), import from n8n/Make/Zapier, export to
-LangGraph/CrewAI/Docker/Python, and UI polish (node grouping's persistence across reload
-is now fixed — see below — but auto-layout, mini-map, command palette, and a template
-gallery remain open).
+LangGraph/CrewAI/Docker/Python. UI polish continues incrementally — auto-layout, mini-map,
+command palette, and a template gallery are done (see "Visual & catalog quality pass"
+below); a shared `FilterPillGroup`/`SegmentedToggle`/`Badge`/`Card`/`Button` component set
+now exists and is used on several pages (see "Design system upgrade & n8n/Make.com
+feature parity (Phase 5 depth pass)" below), but migrating every remaining page and doing
+the full elevation/motion/spacing/responsive sweep called for in that phase is still
+partial — see that section's "Not done in this pass".
 
 ## Tests run during development (see delivery log)
 
@@ -989,3 +995,346 @@ and a production `vite build` (`dist/` output, 636 kB main bundle, no build erro
 one warning is Vite's standard "chunk >500kB" advisory, not an error). No test files
 target the touched modules yet; existing `vitest` suites were left untouched and not
 re-run in this pass.
+
+## Schema-driven config sidebar (this round)
+
+Goal: bring the node configuration sidebar closer to Make.com/n8n — a proper form per
+node type instead of hand-editing raw params JSON for everything — without touching any
+API/worker contract. `workflowsRouter.put()`, `resolveExpressions()`, and every worker
+node plugin under `apps/worker/src/nodes/*.ts` are byte-for-byte unchanged; this is a
+web-only, additive pass, so existing saved workflows keep loading and running exactly
+as before.
+
+### What changed
+
+- **`apps/web/src/lib/paramSchemas.ts`** *(new)* — a per-node-type field registry
+  (`webhook, schedule, httpRequest, openai, slack, googleSheets, if, switch, set`)
+  describing label/type/default/help/`visibleIf`/`validate` for each param. Field types:
+  `string | expression | text | number | boolean | enum | object | array | json`. Node
+  types with no entry here fall back to the pre-existing raw-JSON editor untouched.
+- **`apps/web/src/components/ParamForm.tsx`** *(new)* — generic renderer for every field
+  type above, plus a few guided extras layered on top for the highest-value node types:
+  - **webhook** — live "final URL" preview (`/webhook/:workflowId/:path`) with a copy
+    button, and a duplicate-path warning against sibling webhook nodes on the same canvas.
+  - **schedule** — humanized cron description + next 5 fire times, computed by a new
+    dependency-free `apps/web/src/lib/cronUtils.ts` (not used by the real scheduler —
+    `apps/api/src/utils/scheduler.ts` still owns actual cron evaluation via BullMQ; this
+    is preview-only).
+  - **httpRequest** — a "Body content type" preset selector (JSON / form-urlencoded /
+    raw text / none) that sets or clears the `Content-Type` header for you.
+  - **openai** — a "+ Insert `{{input}}`" button for the prompt field and a live
+    character count on the system prompt.
+  - Also exports `isScheduleCronValid()`, used by `CanvasPage.tsx` to disable the
+    **Activate** button while a Schedule node's cron is invalid (the workflow can still
+    be saved as a draft).
+- **`apps/web/src/components/NodeConfigPanel.tsx`** — mounts `ParamForm` above the
+  existing JSON editor for any node type with a schema, behind a **"Raw JSON" / "Use
+  form"** toggle that stays in sync in both directions (editing the form updates the raw
+  JSON string mirror; editing raw JSON and blurring re-parses back into the form). The
+  `switch` node keeps its existing bespoke `SwitchCasesEditor` untouched — a generic
+  array editor would have lost that component's up/down case-priority reordering UX.
+  The Test Node panel gained a **Single object / Array of items** input-mode toggle (both
+  ultimately send the same `input` field to `POST /nodes/test-run` — the worker's
+  `normalizeToItems()` already turns a JSON array into one item per element, so no API
+  change was needed) and now persists the last test input + mode per `workflowId:nodeId`
+  in `sessionStorage`, plus shows an "Items out" count after a run.
+- **`apps/web/src/pages/CanvasPage.tsx`** — passes `workflowId` and the list of sibling
+  webhook `params.path` values into the panel (for the URL preview / duplicate warning),
+  and gates the Activate button on `isScheduleCronValid()` across all Schedule nodes.
+
+### Not done in this pass
+
+Google Sheets and Slack got schema-driven fields but no bespoke payload builder beyond
+that (no per-row mapping UI for Sheets, no rich-text/block builder for Slack) — flagged
+as a reasonable next step, not attempted here. Live field-picker suggestions sourced from
+an upstream node's last real output (vs. today's static `$node["Label"].json`
+autocomplete) were also left for later, as were credentials quick-create shortcuts beyond
+what already existed.
+
+### Verified
+
+`apps/web` passes `tsc -b` (project build mode, zero errors) with a live `npm install`
+against the real npm registry, and `oxlint` on every touched/added file reports zero
+errors (one harmless "fast refresh only works when a file only exports components"
+style warning on `ParamForm.tsx`'s exported `isScheduleCronValid` helper — functionally
+inert). No existing test files target the touched modules; nothing was re-run or skipped
+beyond that.
+
+## Visual & catalog quality pass — Make.com/n8n parity (Phases 1-3 of 4)
+
+Presentation-layer + content pass across the canvas node chrome, the node icon system, and
+the template gallery, aimed at closing the biggest visual/catalog gaps vs. Make.com and
+n8n. Explicitly out of scope and untouched: `workflowsRouter.put()`,
+`resolveExpressions()`, worker node execution logic, and `ParamForm.tsx`/`paramSchemas.ts`
+(the config sidebar from the previous pass). All 4 phases are now done.
+
+### Phase 1 — real, recognizable node icons
+
+Every node icon was a plain emoji rendered as `<span>{meta.icon}</span>` — inconsistent
+across OS/browser emoji fonts and nowhere near n8n/Make's instantly-recognizable brand
+icons.
+
+- **`apps/web/src/lib/nodeTypeMeta.ts`** — added an `iconKey` field per node type
+  (`si:siSlack` for a branded service mark, `lucide:GitBranch` for a generic/logic glyph),
+  keeping the emoji as a documented fallback so nothing breaks mid-migration or for an
+  unmapped community node type.
+- **`apps/web/src/components/NodeIcon.tsx`** *(new)* — the single icon-rendering entry
+  point for the whole app. Resolves `si:` keys to real brand SVGs from the CC0
+  `simple-icons` package (actual brand hex, e.g. Slack `#4A154B`, Discord `#5865F2`), `lucide:`
+  keys to `lucide-react` components for logic/generic nodes (IF → `GitBranch`, Switch →
+  `Shuffle`, Schedule → `Clock`, Webhook → `Webhook`, For Each → `Repeat`, Code →
+  `Braces`, etc.), and only falls back to the emoji when neither resolves. Also exports
+  `findBrandIconByName()` for the Marketplace, which matches by npm package name rather
+  than node type.
+- Wired into all three places an icon rendered: `FlowNode.tsx` (canvas), `NodePalette.tsx`
+  (node picker sidebar + Recently Used), and `TemplateGalleryPage.tsx`'s app-icon row — one
+  icon system everywhere, not a bespoke one per surface. `MarketplacePage.tsx` also got a
+  small icon tile per package using the same system as a down payment on Phase 4.
+- `apps/web/package.json` — added `lucide-react` and `simple-icons` (CC0) as dependencies.
+
+### Phase 2 — node card polish + density toggle + resizable cards
+
+- **`apps/web/src/lib/nodeDensity.ts`** *(new)* — `NodeDensityContext`
+  (`compact`/`comfortable`/`expanded`) and `CredentialNamesContext` (credential id → name
+  lookup for the Expanded tier). Both are plain canvas-UI React contexts, never part of
+  `node.data`/params, so they can never leak into `handleSave`'s `nodesPayload` or the
+  saved workflow JSON.
+- **`apps/web/src/components/FlowNode.tsx`** — three density tiers: **Compact** (~120px,
+  icon + type only, tooltip-on-hover label, no run badge, for dense 40-node canvases),
+  **Comfortable** (unchanged existing layout), **Expanded** (adds a truncated one-line
+  `lastRunOutput` preview and the real credential name instead of just the presence dot).
+  Added React Flow's `NodeResizer` (Comfortable/Expanded tiers only, 160–420px), storing
+  the width in a new UI-only `data.uiWidth` field that `handleSave` never reads. Added the
+  hover-lift/shadow treatment (`shadow-sm hover:shadow-lg hover:-translate-y-px`) matching
+  Make.com's card elevation. Status rings, the credential dot, the pinned badge, IF
+  true/false handles, and the inspect popover are all unchanged.
+- **`apps/web/src/pages/CanvasPage.tsx`** — added the Compact/Comfortable/Expanded toolbar
+  toggle (persisted to `localStorage`, not workflow state), a `credentialNames` lookup
+  memo built from the credentials list the page already loads, and wrapped `<ReactFlow>` in
+  both new context providers.
+
+### Phase 3 — template gallery: 36 templates, richer metadata, filtering
+
+- **`apps/api/src/routes/templates.ts`** — grew from 6 to 36 static templates. All 5
+  original categories now have 4+ entries each (`AI`, `Data`, `Dev`, `Notifications`,
+  `Scheduling`), plus 8 new categories from the brief: `CRM/Sales`, `DevOps`, `Support`,
+  `E-commerce`, `Content`, `Data Ops`, `Agent`, `RAG`. Every template now carries
+  `difficulty` (`beginner`/`intermediate`/`advanced`), `estimatedSetupMinutes`, and
+  `requiredCredentialTypes` (derived from its node types via a small local
+  node-type→credential-label map, kept independent of the web app's
+  `credentialSchemas.ts` to avoid an api/web import). The summary payload sent to the
+  client also now includes lightweight `nodes`/`edges` (id/type/position,
+  source/target/sourceHandle) — just enough data for a client-side graph-preview
+  thumbnail, no screenshot/asset pipeline needed. An `order` field (array index) gives the
+  gallery's "Newest" sort something real to sort by for static, code-shipped data.
+- **`apps/web/src/pages/TemplateGalleryPage.tsx`** — added `TemplateGraphPreview`, an
+  inline SVG mini-map rendered from each template's actual node positions/edges (boxes
+  colored + icon'd via `<NodeIcon>`/`nodeTypeMeta`, arrows colored green/red for IF
+  true/false branches) — the realistic, low-effort equivalent of Make.com's template
+  screenshots. Every card now also shows a difficulty badge, an "~N min setup" chip, and a
+  "Needs: X, Y" credential-requirement line. Category filtering is now multi-select
+  (toggle any combination; "All" clears it) instead of single-select, and there's a new
+  sort control (Most used / Newest / Difficulty). Search also matches raw node type
+  strings now, not just their display labels. Everything still runs client-side against
+  the one `/templates` fetch — no new endpoints were needed.
+
+### Phase 4 — Marketplace advanced browsing, trust signals & install UX
+
+- **`apps/api/src/marketplace/registryIndex.ts`** — grew the curated index from 3 to 15
+  entries across the brief's categories (CRM: HubSpot, Salesforce Lite; Support: Zendesk,
+  Intercom; Marketing: Mailchimp, ConvertKit; Dev tools: Linear, Jira; Storage: Airtable,
+  Dropbox; Payments: Stripe; Productivity: Asana, Trello, ClickUp — plus the original
+  Airtable/Zendesk/Mailchimp). Every entry now carries `category`, `verified: true`
+  (reserved for this curated file — direct npm-name installs from the "install by name"
+  form are never in this array and so are never verified), and a `changelogUrl`. Added
+  `withDownloadCounts()`, which fetches real monthly downloads from
+  `https://api.npmjs.org/downloads/point/last-month/<pkg>` (same registry host already used
+  for install — no new external dependency) with a 1-hour in-memory cache, and returns
+  `null` — never a fabricated number — on any lookup failure (expected for the
+  scaffolded/placeholder package names above, since they aren't real published packages).
+  `listCategories()` derives the filter-chip list from the index itself, so adding a
+  category to an entry is enough to make it filterable.
+- **`apps/api/src/routes/marketplace.ts`** *(additive only — the real npm-install/tarball
+  code path is untouched)* — `GET /marketplace` now accepts `&category=` alongside the
+  existing `?query=` and attaches `downloadsLastMonth` to every entry via
+  `withDownloadCounts()`. Added `GET /marketplace/categories` and
+  `GET /marketplace/:name/versions` (proxies npm's full version list with publish dates,
+  for a real version picker instead of just "latest").
+- **`apps/web/src/pages/MarketplacePage.tsx`** — category filter chips reuse the exact
+  pill pattern from `TemplateGalleryPage.tsx` (`role="group"`, `aria-pressed`, same
+  `rounded-full` classes) rather than inventing a fourth chip style, and compose with the
+  existing debounced search (both narrow the same list together). Each curated card now
+  shows a verified badge (`BadgeCheck` + "verified · official") vs. a plain "community"
+  label for anything not in the curated file, a category chip, and a
+  `downloadsLastMonth` count formatted as `1.2k`/`3.4M`/`—`. The version input becomes a
+  real `<select>` of published versions (lazy-loaded on focus from the new
+  `/versions` endpoint) when they're available, falling back to the old free-text pin
+  field if the lookup comes back empty. Install/update/direct-install all now run through
+  `runInstall()`, which drives a `Resolving → Downloading → Extracting → Registering
+  nodes` dot-sequence on a fixed cadence for the duration of the real
+  `POST /marketplace/install` request — the last stage is only shown once that request has
+  actually resolved, and the progress indicator is explicitly titled "Approximate
+  progress — not a live server event stream" since this is a single request/response, not
+  SSE/polling (flagged as the larger, out-of-scope alternative in the brief). Errors from
+  a failed install now include a short cause line (network-unreachable / 404 package not
+  found / 5xx server error) appended to the server's own message instead of one generic
+  string. The "Installed" section auto-checks every installed package for updates once on
+  load (reusing `GET /marketplace/latest/:name`) instead of requiring a manual click per
+  package, and its empty state now reads "Nothing installed yet — browse the catalog
+  below" instead of rendering nothing.
+- **`packages/shared-types/src/index.ts`** — `CommunityNodeManifest` gained the four new
+  optional fields (`category`, `verified`, `downloadsLastMonth`, `changelogUrl`) shared
+  between the API and web app.
+- Untouched, as required: `workflowsRouter.put()`, `resolveExpressions()`, worker node
+  execution logic, `ParamForm.tsx`/`paramSchemas.ts`, and the real npm-install/tarball
+  download/extract/DB-record/Redis-notify code path in `routes/marketplace.ts` — Phase 4
+  only added a `category` query param, two new read-only `GET` endpoints, and new fields
+  on existing response shapes.
+
+### Verified
+
+Manual read-through and structural checks (brace/tag balance, category-list cross-
+reference between the new registry entries and the client's chip renderer, route-path
+collision check across all `marketplaceRouter` handlers) on every touched/added file, plus
+the same checks from Phases 1-3 (node-type cross-reference, template id/category counts).
+`lucide-react` and `simple-icons` were added to `apps/web/package.json` in Phase 1 but
+this sandbox has no reliable network access to run `npm install` end-to-end, so none of
+Phases 1-4 have been through a live `tsc -b`/`vite build` — run `npm install` at the repo
+root (or inside `apps/api` and `apps/web`) and a full build/typecheck before deploying.
+
+## Design system upgrade & n8n/Make.com feature parity (Phase 5 depth pass)
+
+Two work-streams: componentizing the accumulated duplicate UI patterns into a small
+shared component set, and closing specific, re-verified n8n/Make.com parity gaps.
+
+### Audit correction — read this before trusting the brief's gap list
+
+The Phase 5 brief's "verified-missing" list was itself stale in two important ways,
+caught by re-checking the code before building rather than trusting the brief:
+
+- **Workflow-level sharing/permissions was already fully built** — `WorkflowShare` DB
+  functions, `/workflows/:id/shares` routes with role-gated middleware, ownership
+  transfer, and a complete `WorkflowShareModal` UI already wired into `CanvasPage.tsx`'s
+  toolbar (see "Workflow-level sharing & ownership transfer" above). This was **not**
+  rebuilt — doing so would have been a straight regression, exactly the failure mode the
+  brief itself warned about.
+- **Workflow tags' backend was already fully built** — `Tag`/`WorkflowTag` tables (added
+  back in the migration covered under "Variables, tags, error workflows, and manual test
+  payloads" above), full CRUD in `apps/api/src/routes/tags.ts`
+  (`GET/POST /tags`, `DELETE /tags/:id`, `GET/PUT /tags/workflows/:workflowId`), and
+  `GET /workflows?tag=` filtering already wired into `workflowsRouter`. The only real gap
+  was the **frontend** — no tag chips/filter/editor existed on `WorkflowsListPage.tsx`.
+  That's the only tags work this phase actually did.
+- **`NodePalette`'s category headers were miscategorized as a fourth duplicate pill
+  implementation.** They're static section labels (a small colored dot + uppercase text,
+  no `rounded-full`, no click handler, no active/inactive state) — not an interactive
+  filter pill at all. Left alone rather than force a migration that would have changed
+  working, non-duplicate UI under a false premise.
+- Per-node notes (2a) *was* genuinely missing everywhere (web/api/worker) — that's real,
+  new work, detailed below.
+
+### Work-stream 1 — shared UI primitives (`apps/web/src/components/ui/`)
+
+- **`FilterPillGroup.tsx`** — single- or multi-select pill/chip group. Renders
+  `role="radiogroup"` (single-select) or `role="group"` with `aria-checked` per pill
+  (multi-select), left/right arrow-key roving navigation between pills, and the existing
+  `focus-ring` treatment. Replaces the near-identical `rounded-full` filter
+  implementations in `TemplateGalleryPage.tsx` (multi-select category filter) and
+  `MarketplacePage.tsx` (single-select category filter) — both migrated, zero behavior
+  change to the underlying filtering logic. Also used for the new tag filter on
+  `WorkflowsListPage.tsx`.
+- **`SegmentedToggle.tsx`** — connected segmented control for an exclusive ternary
+  choice, purpose-built for (and now used by) `CanvasPage.tsx`'s Compact/Comfortable/
+  Expanded density toggle, which is a single setting rather than independent filters and
+  so intentionally isn't a `FilterPillGroup`.
+- **`Badge.tsx`** — small uppercase status/meta chip with `neutral`/`signal`/`alert`/
+  `amber` variants, replacing the repeated inline
+  `text-[10px] uppercase tracking-wide ... rounded px-1.5 py-0.5` pattern. In use on
+  `TemplateGalleryPage.tsx` (category + setup-time chips), `MarketplacePage.tsx`
+  (installed package version/source/update-available chips), `CredentialsPage.tsx`
+  (credential type/OAuth2/shared-access chips), and `WorkflowsListPage.tsx` (tag chips).
+  Left `TemplateGalleryPage.tsx`'s per-difficulty `DifficultyBadge` alone — it uses a
+  dynamic per-difficulty color, not one of the four fixed Badge variants, so folding it
+  into `Badge` would have meant losing the color coding.
+- **`Card.tsx`** — the bordered list-item shell (`bg-panel` + border + `rounded-lg`
+  padding), with an optional `hoverLift` prop reusing the same
+  `shadow-sm hover:shadow-lg hover:-translate-y-px`-style treatment already established
+  on canvas nodes in Phase 2, via the new `.elevation-card` CSS class (see below) so cards
+  and canvas nodes read as one visual language. In use on `MarketplacePage.tsx`
+  (installed package list), `CredentialsPage.tsx` (credential list), and
+  `WorkflowsListPage.tsx` (workflow list).
+- **`Button.tsx`** — `primary`/`secondary`/`ghost` variants with a built-in `loading`
+  prop (spinner + auto-disable), replacing the repeated hand-rolled
+  `disabled={busy} ... {busy ? 'Working…' : 'Do it'}` pattern. In use on
+  `TemplateGalleryPage.tsx` ("Use this template"), `MarketplacePage.tsx` (update/check-
+  for-updates/uninstall), `CredentialsPage.tsx` (test connection), and
+  `WorkflowsListPage.tsx` (new workflow, add tag).
+- **`index.css`** — added a `.transition-default` utility (150ms,
+  `cubic-bezier(0.4, 0, 0.2, 1)`) so hover/focus transitions share one duration/easing
+  instead of the previous ad hoc bare `transition` (browser-default ~0ms on some
+  elements). Added a 3-level elevation system — `.elevation-panel` / `.elevation-card` /
+  `.elevation-floating` — as shared `border` + `box-shadow` combinations, with a
+  `[data-theme='white']` override so shadow contrast reads correctly on the light theme
+  instead of the near-invisible smear a dark-theme shadow value produces on a white
+  background.
+
+### Work-stream 2 — n8n/Make.com feature-parity gaps
+
+**2a. Per-node notes** (genuinely missing, now shipped end-to-end):
+
+- `apps/api/src/routes/workflows.ts` — added `notes: z.string().nullable().optional()`
+  to `nodeSchema`, following the exact same "display-only metadata, never read by
+  execution" pattern already used for `style`/`parentId` on sticky-note/group nodes.
+  `workflowsRouter.put()`'s handler body, `resolveExpressions()`, and the worker's
+  executor were **not** touched — `notes` round-trips through `nodesJson` (a JSONB
+  column, no migration needed) purely as data the worker never looks at.
+- `apps/web/src/pages/CanvasPage.tsx` — `notes` added to the load mapping (workflow JSON
+  → React Flow node data) and to `handleSave`'s `nodesPayload` builder, so — unlike
+  `uiWidth`, which is deliberately *excluded* from `nodesPayload` and never persists —
+  notes genuinely survive save/reload, per the brief's acceptance criterion.
+- `apps/web/src/components/FlowNode.tsx` — a 🗒️ affordance next to the pin badge,
+  Comfortable/Expanded density tiers only (Compact stays uncluttered per the brief), that
+  toggles a new `NodeNotePopover.tsx` — a small read-only popover mirroring
+  `NodeInspectPopover.tsx`'s absolute-positioned card styling rather than overloading that
+  component's unrelated run-snapshot props.
+- `apps/web/src/components/NodeConfigPanel.tsx` — a plain `<textarea>` Note field, right
+  under the Label field and visually separated from the node's functional parameters,
+  with the same blur-commit pattern as Label.
+
+**2b. Workflow tags** (backend pre-existing, frontend added):
+
+- `apps/web/src/pages/WorkflowsListPage.tsx` — rewritten to add: a `FilterPillGroup`
+  single-select tag filter bar (refetches `GET /workflows?tag=` on selection); tag chips
+  on each workflow card (`GET /tags/workflows/:id`, loaded per-visible-workflow since
+  there's no batch endpoint); and an inline "+ Edit tags" panel per card that toggles tag
+  membership via `PUT /tags/workflows/:id` and can create a new tag via `POST /tags`.
+
+**2c. Workflow sharing/permissions:** confirmed already fully shipped (see the audit
+correction above) — nothing to build.
+
+### Not done in this pass
+
+- `ExecutionHistoryPage.tsx` was not migrated to the new `Badge`/`Card` primitives —
+  called out in the brief as one of the four target pages but not reached.
+- The full 1c visual-polish sweep (spacing-rhythm audit across `p-5`/`px-4 py-3`/`p-4`,
+  `EmptyState` usage audit across every list page, responsive check of Marketplace/
+  Template Gallery/Canvas toolbar at sub-640px widths, `simple-icons` per-icon subpath
+  imports, `React.memo` on `TemplateGraphPreview`, and the IF-edge colorblind shape
+  differentiation from the Phase 4 handoff) was not attempted — the elevation/motion
+  tokens and the primitives themselves are in place, but applying them everywhere and
+  doing the responsive/audit work is a large enough surface to warrant its own pass
+  rather than a rushed sweep.
+- Two pill/chip spots the brief's list technically also matched but that weren't
+  interactive filter pills at all (`NodePalette`'s category headers, per the audit
+  correction above) were deliberately left as-is.
+
+### Verified
+
+Manual read-through of every touched file, plus a brace/paren balance check (via a
+small Node script) on all new/edited `.tsx`/`.ts` files in this pass to catch edit
+mistakes — one pre-existing imbalance was found in `NodeConfigPanel.tsx` (a
+`{'{{'}` JSX text literal on its "type `{{` for expression autocomplete" hint, present
+before this phase) and confirmed harmless, not introduced by this pass's edits. Same
+`npm install`/`tsc -b`/`vite build` limitation as every prior phase — this sandbox has no
+reliable network access to install dependencies, so none of this has been through a live
+typecheck or build; run one before deploying.

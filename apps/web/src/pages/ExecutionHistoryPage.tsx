@@ -5,6 +5,9 @@ import AppShell from '../components/AppShell';
 import EmptyState from '../components/EmptyState';
 import AgentTraceViewer from '../components/AgentTraceViewer';
 import CitationViewer from '../components/CitationViewer';
+import Badge from '../components/ui/Badge';
+import Card from '../components/ui/Card';
+import SegmentedToggle from '../components/ui/SegmentedToggle';
 
 interface Execution {
   id: string;
@@ -123,30 +126,22 @@ function DataView({ data, mode }: { data: unknown; mode: ViewMode }) {
 
 function ViewModeToggle({ mode, onChange }: { mode: ViewMode; onChange: (m: ViewMode) => void }) {
   return (
-    <div className="inline-flex border border-panelBorder rounded-md overflow-hidden">
-      {VIEW_MODES.map((m) => (
-        <button
-          key={m}
-          type="button"
-          onClick={() => onChange(m)}
-          className={`px-2 py-0.5 text-[10px] uppercase tracking-wide transition ${
-            mode === m ? 'bg-signal/10 text-signal' : 'text-muted hover:bg-canvas'
-          }`}
-        >
-          {m}
-        </button>
-      ))}
-    </div>
+    <SegmentedToggle
+      aria-label="View mode"
+      options={VIEW_MODES.map((m) => ({ value: m, label: m }))}
+      value={mode}
+      onChange={onChange}
+    />
   );
 }
 
-const STATUS_COLOR: Record<string, string> = {
-  success: 'text-signal border-signal/40 bg-signal/10',
-  failed: 'text-alert border-alert/40 bg-alert/10',
-  running: 'text-amber border-amber/40 bg-amber/10',
-  paused: 'text-amber border-amber/40 bg-amber/10',
-  skipped: 'text-muted border-panelBorder',
-  pending: 'text-muted border-panelBorder',
+const STATUS_BADGE_VARIANT: Record<string, 'signal' | 'alert' | 'amber' | 'neutral'> = {
+  success: 'signal',
+  failed: 'alert',
+  running: 'amber',
+  paused: 'amber',
+  skipped: 'neutral',
+  pending: 'neutral',
 };
 
 /** True if `output` looks like a `ragQuery` node result (has a `citations` array). */
@@ -243,30 +238,30 @@ export default function ExecutionHistoryPage() {
 
       {stats && stats.total > 0 && (
         <div className="grid grid-cols-5 gap-3 mb-6">
-          <div className="bg-panel border border-panelBorder rounded-lg px-4 py-3">
+          <Card>
             <p className="text-[10px] uppercase text-muted">Success rate</p>
             <p className="text-lg font-semibold">
               {stats.successRate != null ? `${Math.round(stats.successRate * 100)}%` : '—'}
             </p>
-          </div>
-          <div className="bg-panel border border-panelBorder rounded-lg px-4 py-3">
+          </Card>
+          <Card>
             <p className="text-[10px] uppercase text-muted">Avg runtime</p>
             <p className="text-lg font-semibold">
               {stats.avgRuntimeSeconds != null ? `${stats.avgRuntimeSeconds.toFixed(1)}s` : '—'}
             </p>
-          </div>
-          <div className="bg-panel border border-panelBorder rounded-lg px-4 py-3">
+          </Card>
+          <Card>
             <p className="text-[10px] uppercase text-muted">Succeeded</p>
             <p className="text-lg font-semibold text-signal">{stats.succeeded}</p>
-          </div>
-          <div className="bg-panel border border-panelBorder rounded-lg px-4 py-3">
+          </Card>
+          <Card>
             <p className="text-[10px] uppercase text-muted">Failed</p>
             <p className="text-lg font-semibold text-alert">{stats.failed}</p>
-          </div>
-          <div className="bg-panel border border-panelBorder rounded-lg px-4 py-3">
+          </Card>
+          <Card>
             <p className="text-[10px] uppercase text-muted">Total runs</p>
             <p className="text-lg font-semibold">{stats.total}</p>
-          </div>
+          </Card>
         </div>
       )}
       {retryMessage && (
@@ -296,9 +291,7 @@ export default function ExecutionHistoryPage() {
               }`}
             >
               <div className="flex items-center justify-between">
-                <span className={`text-xs px-2 py-0.5 rounded-full border ${STATUS_COLOR[exec.status]}`}>
-                  {exec.status}
-                </span>
+                <Badge variant={STATUS_BADGE_VARIANT[exec.status] ?? 'neutral'}>{exec.status}</Badge>
                 <span className="text-xs text-muted">{duration(exec)}</span>
               </div>
               <p className="text-xs text-muted mt-2">{new Date(exec.startedAt).toLocaleString()}</p>
@@ -324,9 +317,7 @@ export default function ExecutionHistoryPage() {
                     className="focus-ring w-full flex items-center justify-between px-4 py-3 text-left"
                   >
                     <span className="text-sm font-medium">{run.nodeId}</span>
-                    <span className={`text-xs px-2 py-0.5 rounded-full border ${STATUS_COLOR[run.status]}`}>
-                      {run.status}
-                    </span>
+                    <Badge variant={STATUS_BADGE_VARIANT[run.status] ?? 'neutral'}>{run.status}</Badge>
                   </button>
                   {expandedNode === run.id && (
                     <div className="px-4 pb-4 space-y-3 border-t border-panelBorder pt-3">

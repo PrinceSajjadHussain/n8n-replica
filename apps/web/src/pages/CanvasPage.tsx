@@ -26,6 +26,8 @@ import { autoLayout } from '../lib/autoLayout';
 import NodePalette from '../components/NodePalette';
 import { NODE_TYPES } from '../lib/nodeTypeMeta';
 import NodeConfigPanel from '../components/NodeConfigPanel';
+import { NodeDensityContext, CredentialNamesContext, NODE_DENSITY_OPTIONS, type NodeDensity } from '../lib/nodeDensity';
+import { isScheduleCronValid } from '../components/Paramform';
 import CollabPanel from '../components/CollabPanel';
 import ConfirmDialog from '../components/ConfirmDialog';
 
@@ -50,7 +52,29 @@ export default function CanvasPage() {
   const [credentials, setCredentials] = useState<
     { id: string; type: string; name?: string; lastTestOk?: boolean | null }[]
   >([]);
+  const credentialNames = useMemo(
+    () => Object.fromEntries(credentials.map((c) => [c.id, c.name || c.type])),
+    [credentials]
+  );
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [density, setDensity] = useState<NodeDensity>(() => {
+    // Canvas UI state only — deliberately kept out of nodesPayload/handleSave
+    // so it never touches the saved workflow JSON. Persisted per-browser via
+    // localStorage purely so switching tabs doesn't reset it.
+    try {
+      return (localStorage.getItem('flowforge:node-density') as NodeDensity) || 'comfortable';
+    } catch {
+      return 'comfortable';
+    }
+  });
+  function changeDensity(next: NodeDensity) {
+    setDensity(next);
+    try {
+      localStorage.setItem('flowforge:node-density', next);
+    } catch {
+      // localStorage unavailable — density just won't persist across reloads.
+    }
+  }
   const [runBanner, setRunBanner] = useState<string | null>(null);
   const [aiModalOpen, setAiModalOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
@@ -128,6 +152,7 @@ export default function CanvasPage() {
             continueOnFail: n.continueOnFail ?? false,
             isPinned: n.isPinned ?? false,
             pinnedOutput: n.pinnedOutput,
+            notes: n.notes ?? null,
           },
         };
       })
@@ -494,6 +519,7 @@ export default function CanvasPage() {
         continueOnFail: Boolean(n.data.continueOnFail),
         isPinned: Boolean(n.data.isPinned),
         pinnedOutput: n.data.pinnedOutput,
+        notes: (n.data.notes as string | null | undefined) ?? null,
         parentId: n.parentId ?? null,
         extent: n.extent === 'parent' ? ('parent' as const) : null,
       };
@@ -514,6 +540,12 @@ export default function CanvasPage() {
     const { data } = await api.post(`/workflows/${workflowId}/activate`, { isActive: !isActive });
     setIsActive(data.workflow.isActive);
   }
+
+  // A workflow with an invalid Schedule cron can still be saved as a draft, but shouldn't be activated
+  // (it would otherwise fail confusingly when the scheduler tries to register the repeatable job).
+  const hasInvalidCron = nodes.some(
+    (n) => n.data.nodeType === 'schedule' && !isScheduleCronValid('schedule', (n.data.params as Record<string, unknown>) ?? {})
+  );
 
   async function handleGenerateWithAI() {
     if (!aiPrompt.trim()) return;
@@ -620,15 +652,15 @@ export default function CanvasPage() {
           ] as CommandItem[]
         }
       />
-      <header className="h-14 border-b border-panelBorder bg-panel flex items-center justify-between px-4 shrink-0">
-        <div className="flex items-center gap-3">
+      <header className="min-h-[56px] border-b border-panelBorder bg-panel flex flex-wrap items-center gap-y-2 px-4 py-2 shrink-0">
+        <div className="flex items-center gap-3 min-w-0">
           <Link to="/workflows" className="focus-ring text-muted hover:text-ink text-sm">
             ← Workflows
           </Link>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="focus-ring bg-transparent text-sm font-medium border-b border-transparent hover:border-panelBorder focus:border-signal px-1"
+            className="focus-ring bg-transparent text-sm font-medium border-b border-transparent hover:border-panelBorder focus:border-signal px-1 max-w-[min(50vw,520px)] truncate"
           />
           {isActive && (
             <span className="text-xs px-2 py-0.5 rounded-full border text-signal border-signal/40 bg-signal/10">
@@ -636,7 +668,7 @@ export default function CanvasPage() {
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end ml-auto w-full sm:w-auto">
           {runBanner && <span className="text-xs text-amber mr-2">{runBanner}</span>}
           <button
             onClick={addStickyNote}
@@ -690,6 +722,18 @@ export default function CanvasPage() {
           >
             Tests
           </Link>
+          <label className="sr-only" htmlFor="node-density">Node card density</label>
+          <select
+            id="node-density"
+            title="Node card density"
+            value={density}
+            onChange={(e) => changeDensity(e.target.value as NodeDensity)}
+            className="focus-ring text-sm px-2 py-1.5 rounded-md border border-panelBorder bg-canvas text-ink mr-1"
+          >
+            {NODE_DENSITY_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
           {presenceViewers.length > 0 && (
             <div className="flex items-center -space-x-2 mr-1" title={presenceViewers.map((v) => v.email).join(', ')}>
               {presenceViewers.slice(0, 5).map((v) => (
@@ -726,7 +770,9 @@ export default function CanvasPage() {
           </button>
           <button
             onClick={handleToggleActive}
-            className="focus-ring text-sm px-3 py-1.5 rounded-md border border-panelBorder hover:border-signal/50 transition"
+            disabled={!isActive && hasInvalidCron}
+            title={!isActive && hasInvalidCron ? 'Fix the invalid cron expression on the Schedule node before activating' : undefined}
+            className="focus-ring text-sm px-3 py-1.5 rounded-md border border-panelBorder hover:border-signal/50 transition disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {isActive ? 'Deactivate' : 'Activate'}
           </button>
@@ -755,6 +801,8 @@ export default function CanvasPage() {
       <div className="flex-1 flex min-h-0">
         <NodePalette onAdd={addNode} />
         <div className="flex-1 min-w-0 relative" ref={canvasWrapperRef} onMouseMove={handleCanvasMouseMove}>
+          <NodeDensityContext.Provider value={density}>
+          <CredentialNamesContext.Provider value={credentialNames}>
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -771,6 +819,8 @@ export default function CanvasPage() {
             <Controls />
             <MiniMap pannable zoomable />
           </ReactFlow>
+          </CredentialNamesContext.Provider>
+          </NodeDensityContext.Provider>
           {Object.entries(remoteCursors).map(([uid, c]) => (
             <div
               key={uid}
@@ -802,7 +852,13 @@ export default function CanvasPage() {
             continueOnFail={Boolean(selectedNode.data.continueOnFail)}
             isPinned={Boolean(selectedNode.data.isPinned)}
             pinnedOutput={selectedNode.data.pinnedOutput}
+            notes={(selectedNode.data.notes as string | null) ?? null}
             otherNodeLabels={nodes.filter((n) => n.id !== selectedNode.id).map((n) => n.data.label)}
+            workflowId={workflowId}
+            siblingWebhookPaths={nodes
+              .filter((n) => n.id !== selectedNode.id && n.data.nodeType === 'webhook')
+              .map((n) => String((n.data.params as Record<string, unknown> | undefined)?.path ?? ''))
+              .filter(Boolean)}
             onChange={updateSelectedNode}
             onDelete={deleteSelectedNode}
             onClose={() => setSelectedNodeId(null)}

@@ -41,6 +41,11 @@ const nodeSchema = z.object({
   continueOnFail: z.boolean().optional(),
   isPinned: z.boolean().optional(),
   pinnedOutput: z.unknown().optional(),
+  // Per-node freeform note (n8n-style), display-only metadata like `style`/
+  // `parentId` below — never read by resolveExpressions() or the worker's
+  // executor, which only ever look at `params`. Kept loose/optional so it
+  // round-trips through save/reload without affecting execution.
+  notes: z.string().nullable().optional(),
   // Canvas-only annotation fields — only meaningful for type: 'stickyNote' /
   // 'group' (see NON_EXECUTABLE_NODE_TYPES in the worker's executor, which
   // strips these node types out of the execution graph entirely). Kept

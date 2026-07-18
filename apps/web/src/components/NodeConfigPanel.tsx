@@ -4,6 +4,9 @@ import ExpressionAutocomplete, { type ExpressionSuggestion } from './ExpressionA
 import AgentTraceViewer from './AgentTraceViewer';
 import CredentialQuickCreateModal from './CredentialQuickCreateModal';
 import SwitchCasesEditor from './SwitchCasesEditor';
+import ParamForm from './Paramform';
+import { getParamSchema } from '../lib/paramSchemas';
+import { getNodeTypeMeta } from '../lib/nodeTypeMeta';
 import { CREDENTIAL_TYPE_META, NODE_TYPE_TO_CREDENTIAL_TYPE, type CredentialType } from '../lib/credentialSchemas';
 
 interface Props {
@@ -19,8 +22,14 @@ interface Props {
   continueOnFail: boolean;
   isPinned: boolean;
   pinnedOutput: unknown;
+  /** Freeform per-node note (n8n-style), distinct from canvas-level sticky notes. */
+  notes?: string | null;
   /** Labels of other nodes on the canvas, used to power `$node["Label"].json.*` autocomplete. */
   otherNodeLabels?: string[];
+  /** Current workflow id, used only to render the webhook node's "final URL" preview. */
+  workflowId?: string;
+  /** params.path of every other webhook node on the canvas, for the duplicate-path warning. */
+  siblingWebhookPaths?: string[];
   onChange: (updates: {
     label?: string;
     params?: Record<string, unknown>;
@@ -29,6 +38,7 @@ interface Props {
     continueOnFail?: boolean;
     isPinned?: boolean;
     pinnedOutput?: unknown;
+    notes?: string | null;
   }) => void;
   onDelete: () => void;
   onClose: () => void;
@@ -56,7 +66,10 @@ export default function NodeConfigPanel({
   continueOnFail,
   isPinned,
   pinnedOutput,
+  notes,
   otherNodeLabels = [],
+  workflowId,
+  siblingWebhookPaths = [],
   onChange,
   onDelete,
   onClose,
@@ -64,9 +77,17 @@ export default function NodeConfigPanel({
   const [showCredentialModal, setShowCredentialModal] = useState(false);
   const requiredCredentialType = NODE_TYPE_TO_CREDENTIAL_TYPE[nodeType] as CredentialType | undefined;
   const [localLabel, setLocalLabel] = useState(label);
+  const [localNotes, setLocalNotes] = useState(notes ?? '');
   const [paramsJson, setParamsJson] = useState(JSON.stringify(params, null, 2));
   const [jsonError, setJsonError] = useState<string | null>(null);
-  const [testInput, setTestInput] = useState('{}');
+  const paramSchema = getParamSchema(nodeType);
+  const [showRawJson, setShowRawJson] = useState(!paramSchema);
+  const testStorageKey = `session:${workflowId ?? 'wf'}:${nodeId}:testInput`;
+  const testModeStorageKey = `session:${workflowId ?? 'wf'}:${nodeId}:testMode`;
+  const [testInputMode, setTestInputMode] = useState<'single' | 'array'>(
+    () => (sessionStorage.getItem(testModeStorageKey) as 'single' | 'array') || 'single'
+  );
+  const [testInput, setTestInput] = useState(() => sessionStorage.getItem(testStorageKey) ?? '{}');
   const [testBusy, setTestBusy] = useState(false);
   const [testResult, setTestResult] = useState<unknown>(undefined);
   const [testItems, setTestItems] = useState<Array<{ json: unknown; binary?: Record<string, { mimeType: string; fileName?: string; fileSize?: number }> }> | null>(null);
@@ -120,10 +141,23 @@ export default function NodeConfigPanel({
 
   useEffect(() => {
     setLocalLabel(label);
+    setLocalNotes(notes ?? '');
     setParamsJson(JSON.stringify(params, null, 2));
     setJsonError(null);
     setCredTestResult(null);
+    setShowRawJson(!paramSchema);
+    setTestInput(sessionStorage.getItem(`session:${workflowId ?? 'wf'}:${nodeId}:testInput`) ?? '{}');
+    setTestInputMode((sessionStorage.getItem(`session:${workflowId ?? 'wf'}:${nodeId}:testMode`) as 'single' | 'array') || 'single');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodeId]);
+
+  useEffect(() => {
+    sessionStorage.setItem(testStorageKey, testInput);
+  }, [testInput, testStorageKey]);
+
+  useEffect(() => {
+    sessionStorage.setItem(testModeStorageKey, testInputMode);
+  }, [testInputMode, testModeStorageKey]);
 
   useEffect(() => {
     setCredTestResult(null);
@@ -150,6 +184,17 @@ export default function NodeConfigPanel({
     onChange({ params: nextParams });
   }
 
+  /** ParamForm edits are the source of truth while the form is shown; keep the Raw JSON textarea's
+   *  string mirror in sync so toggling to Raw JSON never shows stale content and toggling back never
+   *  loses an edit made while Raw JSON was open (that already flows through commitParams -> params prop). */
+  function handleFormChange(nextParams: Record<string, unknown>) {
+    setParamsJson(JSON.stringify(nextParams, null, 2));
+    setJsonError(null);
+    onChange({ params: nextParams });
+  }
+
+  const nodeMeta = getNodeTypeMeta(nodeType);
+
   return (
     <aside className="w-80 border-l border-panelBorder bg-panel shrink-0 overflow-y-auto flex flex-col">
       <div className="px-4 py-4 border-b border-panelBorder flex items-center justify-between">
@@ -173,6 +218,18 @@ export default function NodeConfigPanel({
         <div>
           <label className="block text-xs text-muted mb-1">Type</label>
           <p className="text-sm text-muted font-display">{nodeType}</p>
+        </div>
+
+        <div>
+          <label className="block text-xs text-muted mb-1">Note</label>
+          <textarea
+            value={localNotes}
+            onChange={(e) => setLocalNotes(e.target.value)}
+            onBlur={() => onChange({ notes: localNotes.trim() ? localNotes : null })}
+            placeholder="Freeform note for this node (not used in execution)"
+            rows={2}
+            className="focus-ring w-full bg-canvas border border-panelBorder rounded-md px-3 py-2 text-xs resize-y"
+          />
         </div>
 
         {[
@@ -339,22 +396,51 @@ export default function NodeConfigPanel({
         </div>
 
         <div>
-          <label className="block text-xs text-muted mb-1">
-            Params (JSON) <span className="text-muted/70 normal-case">— type {'{{'} for expression autocomplete</span>
-          </label>
           {nodeType === 'switch' && <SwitchCasesEditor params={params} onCommit={commitSwitchParams} />}
-          <ExpressionAutocomplete
-            value={paramsJson}
-            onChange={setParamsJson}
-            onBlur={commitParams}
-            rows={10}
-            extraSuggestions={nodeSuggestions}
-            className="focus-ring w-full bg-canvas border border-panelBorder rounded-md px-3 py-2 text-xs font-display"
-          />
-          {jsonError && <p className="text-alert text-xs mt-1">{jsonError}</p>}
-          <p className="text-muted text-[11px] mt-1">
-            {paramHint(nodeType)}
-          </p>
+
+          {paramSchema && (
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs uppercase tracking-widest text-muted">Parameters</p>
+              <button
+                type="button"
+                onClick={() => setShowRawJson((v) => !v)}
+                className="focus-ring text-[11px] px-2 py-1 rounded-md border border-panelBorder text-muted hover:text-ink"
+              >
+                {showRawJson ? 'Use form' : 'Raw JSON'}
+              </button>
+            </div>
+          )}
+
+          {paramSchema && !showRawJson && (
+            <ParamForm
+              nodeType={nodeType}
+              schema={paramSchema}
+              params={params}
+              onChange={handleFormChange}
+              accentColor={nodeMeta.color}
+              extraSuggestions={nodeSuggestions}
+              workflowId={workflowId}
+              siblingWebhookPaths={siblingWebhookPaths}
+            />
+          )}
+
+          {(!paramSchema || showRawJson) && (
+            <>
+              <label className="block text-xs text-muted mb-1">
+                Params (JSON) <span className="text-muted/70 normal-case">— type {'{{'} for expression autocomplete</span>
+              </label>
+              <ExpressionAutocomplete
+                value={paramsJson}
+                onChange={setParamsJson}
+                onBlur={commitParams}
+                rows={10}
+                extraSuggestions={nodeSuggestions}
+                className="focus-ring w-full bg-canvas border border-panelBorder rounded-md px-3 py-2 text-xs font-display"
+              />
+              {jsonError && <p className="text-alert text-xs mt-1">{jsonError}</p>}
+              <p className="text-muted text-[11px] mt-1">{paramHint(nodeType)}</p>
+            </>
+          )}
           <p className="text-muted text-[11px] mt-2 border-t border-panelBorder pt-2">
             Expressions work in any string param: <code>{'{{$json.field}}'}</code>,{' '}
             <code>{'{{$node["Label"].json.field}}'}</code>, <code>{'{{$binary.data.mimeType}}'}</code>,{' '}
@@ -368,7 +454,33 @@ export default function NodeConfigPanel({
 
         <div className="border-t border-panelBorder pt-4">
           <p className="text-xs uppercase tracking-widest text-muted mb-2">Test node</p>
-          <label className="block text-[10px] text-muted mb-1">Mock input (JSON)</label>
+          <div className="flex items-center gap-3 mb-1">
+            <label className="flex items-center gap-1.5 text-[11px] text-ink">
+              <input
+                type="radio"
+                checked={testInputMode === 'single'}
+                onChange={() => {
+                  setTestInputMode('single');
+                  if (testInput.trim().startsWith('[')) setTestInput('{}');
+                }}
+              />
+              Single object
+            </label>
+            <label className="flex items-center gap-1.5 text-[11px] text-ink">
+              <input
+                type="radio"
+                checked={testInputMode === 'array'}
+                onChange={() => {
+                  setTestInputMode('array');
+                  if (!testInput.trim().startsWith('[')) setTestInput('[]');
+                }}
+              />
+              Array of items
+            </label>
+          </div>
+          <label className="block text-[10px] text-muted mb-1">
+            Mock input ({testInputMode === 'array' ? 'JSON array — one entry per item' : 'JSON object'})
+          </label>
           <textarea
             value={testInput}
             onChange={(e) => setTestInput(e.target.value)}
@@ -383,6 +495,11 @@ export default function NodeConfigPanel({
             {testBusy ? 'Running…' : '▶ Run this node in isolation'}
           </button>
           {testError && <p className="text-alert text-xs mt-2">{testError}</p>}
+          {testItems && (
+            <p className="text-[11px] text-muted mt-2">
+              Items out: <span className="text-ink font-display">{testItems.length}</span>
+            </p>
+          )}
           {testResult !== undefined && (
             <div className="mt-2">
               {hasAgentTrace(testResult) ? (

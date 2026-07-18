@@ -114,6 +114,14 @@ export interface CommunityNodeManifest {
   homepage?: string;
   /** Where the manifest came from: a curated index, or a raw npm/git install. */
   source: 'registry' | 'npm' | 'local';
+  /** Marketplace category, e.g. "CRM", "Support". Only set on curated registry entries. */
+  category?: string;
+  /** True for entries curated by FlowForge; false for arbitrary npm-name installs. */
+  verified?: boolean;
+  /** Monthly download count fetched from api.npmjs.org, or null if the lookup failed/is unavailable. */
+  downloadsLastMonth?: number | null;
+  /** Link to the package's changelog, if known. */
+  changelogUrl?: string;
 }
 
 export interface WorkflowNode {

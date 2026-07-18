@@ -8,7 +8,7 @@ import type { AuthedRequest } from '../middleware/auth';
 import { requireAuth } from '../middleware/auth';
 import { pool } from '../db/pool';
 import { createRedisConnection } from '../queue/queue';
-import { searchRegistryIndex } from '../marketplace/registryIndex';
+import { searchRegistryIndex, withDownloadCounts, listCategories } from '../marketplace/registryIndex';
 
 /**
  * Marketplace for third-party/community nodes. Installing a package
@@ -34,10 +34,23 @@ async function notifyWorkersToReload() {
   await publisher.publish(RELOAD_CHANNEL, JSON.stringify({ at: new Date().toISOString() }));
 }
 
-/** GET /marketplace?query=airtable — browse the curated index. */
-marketplaceRouter.get('/', (req, res) => {
-  const query = typeof req.query.query === 'string' ? req.query.query : undefined;
-  res.json(searchRegistryIndex(query));
+/** GET /marketplace?query=airtable&category=CRM — browse the curated index, with real
+ *  (or null-on-failure) monthly download counts attached per entry. */
+marketplaceRouter.get('/', async (req, res, next) => {
+  try {
+    const query = typeof req.query.query === 'string' ? req.query.query : undefined;
+    const category = typeof req.query.category === 'string' ? req.query.category : undefined;
+    const entries = searchRegistryIndex(query, category);
+    res.json(await withDownloadCounts(entries));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** GET /marketplace/categories — distinct categories present in the curated index, for
+ *  the client's category filter chips. */
+marketplaceRouter.get('/categories', (_req, res) => {
+  res.json(listCategories());
 });
 
 /** GET /marketplace/installed — list packages actually installed on this instance. */
@@ -119,6 +132,26 @@ marketplaceRouter.get('/latest/:name', async (req, res, next) => {
     });
     const meta = metaResponse.data as { name: string; version: string };
     res.json({ name: meta.name, latestVersion: meta.version });
+  } catch (err: any) {
+    if (err?.response?.status === 404) return res.status(404).json({ error: 'Package not found on npm' });
+    next(err);
+  }
+});
+
+/** GET /marketplace/:name/versions — proxy npm's version list for a package, so the
+ *  client can offer a real version picker instead of just "latest". Returns versions
+ *  oldest-to-newest as published on npm; the client is expected to reverse for display. */
+marketplaceRouter.get('/:name/versions', async (req, res, next) => {
+  try {
+    const metaResponse = await axios.get(`https://registry.npmjs.org/${encodeURIComponent(req.params.name)}`, {
+      timeout: 15000,
+    });
+    const meta = metaResponse.data as { versions?: Record<string, unknown>; time?: Record<string, string> };
+    const versions = Object.keys(meta.versions ?? {});
+    res.json({
+      name: req.params.name,
+      versions: versions.map((v) => ({ version: v, publishedAt: meta.time?.[v] ?? null })),
+    });
   } catch (err: any) {
     if (err?.response?.status === 404) return res.status(404).json({ error: 'Package not found on npm' });
     next(err);
