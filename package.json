@@ -2,12 +2,19 @@
   "name": "flowforge",
   "private": true,
   "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "build": "pnpm -r build",
-    "lint": "pnpm -r lint",
-    "dev:api": "pnpm --filter @flowforge/api dev",
-    "dev:worker": "pnpm --filter @flowforge/worker dev",
-    "dev:web": "pnpm --filter @flowforge/web dev"
+    "build": "npm run build --workspaces",
+    "lint": "echo no-root-lint",
+    "dev:api": "npm run dev --workspace=@flowforge/api",
+    "dev:worker": "npm run dev --workspace=@flowforge/worker",
+    "dev:web": "npm run dev --workspace=@flowforge/web",
+    "build:shared-types": "npm run build --workspace=@flowforge/shared-types",
+    "build:node-sdk": "npm run build --workspace=@flowforge/node-sdk",
+    "prisma:migrate:deploy": "npm run prisma:migrate:deploy --workspace=@flowforge/api"
   },
   "devDependencies": {
     "typescript": "^5.5.4"

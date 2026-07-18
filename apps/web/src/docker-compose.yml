@@ -1,0 +1,112 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: flowforge
+    ports:
+      # Host port 5433 (not 5432) so this doesn't collide with a Postgres
+      # already running on your machine. Containers still talk to each
+      # other over the internal "postgres:5432" address — only the
+      # host-machine mapping changed. If you connect from the host (e.g.
+      # psql, a GUI client, or `prisma migrate` run outside Docker), use
+      # localhost:5433.
+      - '5433:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - '6380:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/flowforge?schema=public
+      REDIS_URL: redis://redis:6379
+      COMMUNITY_NODES_DIR: /data/community-nodes
+    ports:
+      - '4000:4000'
+    volumes:
+      - community_nodes:/data/community-nodes
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/flowforge?schema=public
+      REDIS_URL: redis://redis:6379
+      RAG_STORE_DIR: /data/rag
+      BROWSER_RUNNER_URL: http://browser-runner:7900
+      COMMUNITY_NODES_DIR: /data/community-nodes
+    volumes:
+      - rag_data:/data/rag
+      - community_nodes:/data/community-nodes
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Optional: real headless-Chrome automation for the "browserAutomation"
+  # node. Not started by default — bring it up explicitly with:
+  #   docker compose --profile browser up -d
+  browser-runner:
+    profiles: ['browser']
+    build:
+      context: services/browser-runner
+    restart: unless-stopped
+    environment:
+      PORT: 7900
+      BROWSER_RUNNER_API_KEY: ${BROWSER_RUNNER_API_KEY:-}
+    ports:
+      - '7900:7900'
+    volumes:
+      - browser_shots:/tmp/flowforge-shots
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    ports:
+      - '5173:5173'
+    environment:
+      VITE_API_URL: http://localhost:4000
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  redis_data:
+  rag_data:
+  browser_shots:
+  community_nodes:

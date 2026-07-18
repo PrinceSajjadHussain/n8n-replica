@@ -1,0 +1,21 @@
+{
+  "name": "flowforge",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "dev:api": "npm run dev --workspace=@flowforge/api",
+    "dev:worker": "npm run dev --workspace=@flowforge/worker",
+    "dev:web": "npm run dev --workspace=@flowforge/web",
+    "build:shared-types": "npm run build --workspace=@flowforge/shared-types",
+    "build:node-sdk": "npm run build --workspace=@flowforge/node-sdk"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}

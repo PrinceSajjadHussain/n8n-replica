@@ -5,10 +5,20 @@ import { createServer } from 'http';
 import type { WorkflowGraph } from '@flowforge/shared-types';
 import { authRouter } from './routes/auth';
 import { workflowsRouter } from './routes/workflows';
+import { workflowVersionsRouter } from './routes/workflowVersions';
+import { marketplaceRouter } from './routes/marketplace';
 import { credentialsRouter } from './routes/credentials';
 import { executionsRouter } from './routes/executions';
 import { webhookRouter } from './routes/webhook';
+import { aiRouter } from './routes/ai';
+import { resumeRouter, publicResumeRouter } from './routes/resume';
+import { nodeTestRouter } from './routes/nodeTest';
 import { initRealtime } from './realtime/socket';
+import { workspacesRouter } from './routes/workspaces';
+import { foldersRouter } from './routes/folders';
+import { commentsRouter } from './routes/comments';
+import { alertsRouter } from './routes/alerts';
+import { workspaceActivityRouter, workflowActivityRouter } from './routes/activity';
 
 const app = express();
 app.use(cors());
@@ -21,9 +31,21 @@ app.get('/health', (_req, res) => {
 
 app.use('/auth', authRouter);
 app.use('/workflows', workflowsRouter);
+app.use('/workflows', workflowVersionsRouter);
+app.use('/workflows', commentsRouter);
+app.use('/workflows', alertsRouter);
+app.use('/workflows', workflowActivityRouter);
+app.use('/workspaces', workspacesRouter);
+app.use('/workspaces', foldersRouter);
+app.use('/workspaces', workspaceActivityRouter);
+app.use('/marketplace', marketplaceRouter);
 app.use('/credentials', credentialsRouter);
 app.use('/executions', executionsRouter);
+app.use('/executions', resumeRouter);
 app.use('/webhook', webhookRouter);
+app.use('/webhook-resume', publicResumeRouter);
+app.use('/nodes', nodeTestRouter);
+app.use('/ai', aiRouter);
 
 const httpServer = createServer(app);
 initRealtime(httpServer);

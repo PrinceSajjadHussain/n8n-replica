@@ -18,7 +18,7 @@ export async function getWorkflow(workflowId: string): Promise<WorkflowRow | nul
 
 export async function createExecution(
   workflowId: string,
-  triggerType: 'manual' | 'webhook' | 'schedule'
+  triggerType: 'manual' | 'webhook' | 'schedule' | 'emailTrigger' | 'fileWatcher' | 'databaseChange' | 'streamTrigger'
 ): Promise<string> {
   const id = randomUUID();
   await pool.query(
@@ -73,6 +73,83 @@ export async function markNodeSkipped(executionId: string, nodeId: string): Prom
      VALUES ($1, $2, $3, 'skipped')`,
     [id, executionId, nodeId]
   );
+}
+
+export async function markExecutionPaused(
+  executionId: string,
+  checkpoint: unknown,
+  resumeToken: string,
+  resumeNodeId: string
+): Promise<void> {
+  await pool.query(
+    `UPDATE "Execution"
+     SET status = 'paused', checkpoint = $1, "resumeToken" = $2, "resumeNodeId" = $3, "pausedAt" = now()
+     WHERE id = $4`,
+    [JSON.stringify(checkpoint), resumeToken, resumeNodeId, executionId]
+  );
+}
+
+export interface PausedExecutionRow {
+  id: string;
+  workflowId: string;
+  checkpoint: unknown;
+  resumeNodeId: string;
+  resumeToken: string;
+}
+
+export async function getPausedExecution(executionId: string): Promise<PausedExecutionRow | null> {
+  const result = await pool.query(
+    `SELECT id, "workflowId", checkpoint, "resumeNodeId", "resumeToken" FROM "Execution" WHERE id = $1 AND status = 'paused'`,
+    [executionId]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function getPausedExecutionByToken(resumeToken: string): Promise<PausedExecutionRow | null> {
+  const result = await pool.query(
+    `SELECT id, "workflowId", checkpoint, "resumeNodeId", "resumeToken" FROM "Execution" WHERE "resumeToken" = $1 AND status = 'paused'`,
+    [resumeToken]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function clearCheckpointAndMarkRunning(executionId: string): Promise<void> {
+  await pool.query(
+    `UPDATE "Execution" SET status = 'running', "resumeToken" = NULL WHERE id = $1`,
+    [executionId]
+  );
+}
+
+export interface ExecutionNodeRunRow {
+  nodeId: string;
+  status: 'success' | 'failed' | 'skipped';
+  output: unknown;
+  input: unknown;
+}
+
+/** Fetches an execution's workflowId + the recorded outputs of every node
+ *  that finished successfully — used to seed retry-from-node. */
+export async function getExecutionForRetry(
+  executionId: string
+): Promise<{ workflowId: string; nodeRuns: ExecutionNodeRunRow[] } | null> {
+  const execResult = await pool.query(`SELECT "workflowId" FROM "Execution" WHERE id = $1`, [executionId]);
+  const execution = execResult.rows[0];
+  if (!execution) return null;
+
+  const runsResult = await pool.query(
+    `SELECT "nodeId", status, output, input FROM "ExecutionNodeRun" WHERE "executionId" = $1`,
+    [executionId]
+  );
+  const rows = runsResult.rows as Array<{
+    nodeId: string;
+    status: 'success' | 'failed' | 'skipped';
+    output: unknown;
+    input: unknown;
+  }>;
+  return {
+    workflowId: execution.workflowId,
+    nodeRuns: rows.map((r) => ({ nodeId: r.nodeId, status: r.status, output: r.output, input: r.input })),
+  };
 }
 
 export async function getDecryptedCredentialById(

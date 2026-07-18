@@ -1,6 +1,6 @@
 import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
-import type { ExecutionJobData } from '@flowforge/shared-types';
+import type { ExecutionJobData, QueueJobData } from '@flowforge/shared-types';
 
 export function createRedisConnection(): IORedis {
   return new IORedis(process.env.REDIS_URL ?? 'redis://localhost:6379', {
@@ -10,6 +10,6 @@ export function createRedisConnection(): IORedis {
 
 export const EXECUTION_QUEUE_NAME = 'workflow-execution';
 
-export function createExecutionQueue(connection: IORedis): Queue<ExecutionJobData> {
-  return new Queue<ExecutionJobData>(EXECUTION_QUEUE_NAME, { connection });
+export function createExecutionQueue(connection: IORedis): Queue<QueueJobData> {
+  return new Queue<QueueJobData>(EXECUTION_QUEUE_NAME, { connection });
 }

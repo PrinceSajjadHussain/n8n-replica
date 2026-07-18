@@ -3,6 +3,7 @@ import { z } from 'zod';
 import bcrypt from 'bcrypt';
 import { createUser, findUserByEmail, findUserById } from '../db/users';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../utils/jwt';
+import { createWorkspace } from '../db/workspaces';
 
 export const authRouter = Router();
 
@@ -25,6 +26,16 @@ authRouter.post('/signup', async (req, res) => {
 
   const passwordHash = await bcrypt.hash(password, 12);
   const user = await createUser(email, passwordHash);
+
+  // Every user gets a personal workspace to hold their workflows. Existing
+  // users (pre-collaboration) were backfilled by migration 5; this covers
+  // everyone signing up from here on.
+  const workspaceName = `${email.split('@')[0] || 'My'}'s Workspace`;
+  try {
+    await createWorkspace(user.id, workspaceName);
+  } catch (err) {
+    console.error('[auth] failed to create personal workspace for new user', user.id, err);
+  }
 
   const accessToken = signAccessToken(user.id);
   const refreshToken = signRefreshToken(user.id);

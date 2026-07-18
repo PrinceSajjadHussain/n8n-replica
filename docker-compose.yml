@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -36,8 +34,11 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/flowforge?schema=public
       REDIS_URL: redis://redis:6379
+      COMMUNITY_NODES_DIR: /data/community-nodes
     ports:
       - '4000:4000'
+    volumes:
+      - community_nodes:/data/community-nodes
     depends_on:
       postgres:
         condition: service_healthy
@@ -53,11 +54,33 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/flowforge?schema=public
       REDIS_URL: redis://redis:6379
+      RAG_STORE_DIR: /data/rag
+      BROWSER_RUNNER_URL: http://browser-runner:7900
+      COMMUNITY_NODES_DIR: /data/community-nodes
+    volumes:
+      - rag_data:/data/rag
+      - community_nodes:/data/community-nodes
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  # Optional: real headless-Chrome automation for the "browserAutomation"
+  # node. Not started by default — bring it up explicitly with:
+  #   docker compose --profile browser up -d
+  browser-runner:
+    profiles: ['browser']
+    build:
+      context: services/browser-runner
+    restart: unless-stopped
+    environment:
+      PORT: 7900
+      BROWSER_RUNNER_API_KEY: ${BROWSER_RUNNER_API_KEY:-}
+    ports:
+      - '7900:7900'
+    volumes:
+      - browser_shots:/tmp/flowforge-shots
 
   web:
     build:
@@ -74,3 +97,6 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  rag_data:
+  browser_shots:
+  community_nodes:

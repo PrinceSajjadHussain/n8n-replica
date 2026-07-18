@@ -26,6 +26,12 @@ export async function findUserByEmail(email: string): Promise<User | null> {
   return result.rows[0] ?? null;
 }
 
+/** Public-safe lookup used for credential sharing (returns id/email only, never the hash). */
+export async function findUserPublicByEmail(email: string): Promise<{ id: string; email: string } | null> {
+  const result = await pool.query(`SELECT id, email FROM "User" WHERE email = $1`, [email]);
+  return result.rows[0] ?? null;
+}
+
 export async function findUserById(id: string): Promise<User | null> {
   const result = await pool.query(
     `SELECT id, email, "passwordHash", "createdAt" FROM "User" WHERE id = $1`,

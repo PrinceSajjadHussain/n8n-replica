@@ -14,6 +14,13 @@ model User {
   createdAt    DateTime     @default(now())
   workflows    Workflow[]
   credentials  Credential[]
+  folders      CredentialFolder[]
+  sharedWithMe CredentialShare[]
+
+  ownedWorkspaces   Workspace[]
+  workspaceMembers  WorkspaceMember[]
+  workflowComments  WorkflowComment[]
+  activityLogs      ActivityLog[]
 
   @@index([email])
 }
@@ -28,28 +35,243 @@ model Workflow {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  publishedNodesJson Json?
+  publishedEdgesJson Json?
+  publishedVersion   Int      @default(0)
+  draftVersion       Int      @default(0)
+
+  workspaceId String?
+  folderId    String?
+
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   executions Execution[]
+  versions   WorkflowVersion[]
+  workspace  Workspace?       @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  folder     WorkflowFolder?  @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  comments   WorkflowComment[]
+  activityLogs ActivityLog[]
+  alertConfigs AlertConfig[]
+
+  @@index([userId])
+  @@index([workspaceId])
+  @@index([folderId])
+}
+
+enum WorkspaceRole {
+  owner
+  admin
+  editor
+  viewer
+}
+
+enum AlertChannel {
+  email
+  webhook
+}
+
+/// Groups workflows, folders, and members together. Every user gets a
+/// personal workspace on signup.
+model Workspace {
+  id        String   @id @default(uuid())
+  name      String
+  ownerId   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner     User               @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  members   WorkspaceMember[]
+  folders   WorkflowFolder[]
+  workflows Workflow[]
+  activityLogs ActivityLog[]
+
+  @@index([ownerId])
+}
+
+model WorkspaceMember {
+  id          String        @id @default(uuid())
+  workspaceId String
+  userId      String
+  role        WorkspaceRole @default(viewer)
+  createdAt   DateTime      @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+}
+
+/// Nested folders inside a workspace for organizing workflows.
+model WorkflowFolder {
+  id          String   @id @default(uuid())
+  workspaceId String
+  parentId    String?
+  name        String
+  createdAt   DateTime @default(now())
+
+  workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  parent    WorkflowFolder?  @relation("FolderChildren", fields: [parentId], references: [id], onDelete: SetNull)
+  children  WorkflowFolder[] @relation("FolderChildren")
+  workflows Workflow[]
+
+  @@index([workspaceId])
+}
+
+/// Comments on a workflow, optionally pinned to a specific node.
+model WorkflowComment {
+  id         String    @id @default(uuid())
+  workflowId String
+  userId     String
+  nodeId     String?
+  body       String
+  resolvedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  workflow Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([workflowId])
+}
+
+/// Append-only activity feed; workspaceId and/or workflowId may be set
+/// depending on the scope of the event.
+model ActivityLog {
+  id          String   @id @default(uuid())
+  workspaceId String?
+  workflowId  String?
+  userId      String?
+  action      String
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workflow  Workflow?  @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  user      User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId])
+  @@index([workflowId])
+  @@index([createdAt])
+}
+
+/// Notification config: who to notify (email or webhook) when a workflow
+/// execution finishes, on failure by default.
+model AlertConfig {
+  id         String       @id @default(uuid())
+  workflowId String
+  channel    AlertChannel
+  target     String
+  onFailure  Boolean      @default(true)
+  onSuccess  Boolean      @default(false)
+  isActive   Boolean      @default(true)
+  createdBy  String
+  createdAt  DateTime     @default(now())
+
+  workflow Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@index([workflowId])
+}
+
+/// One immutable snapshot per save/publish, enabling rollback and diffing.
+model WorkflowVersion {
+  id          String   @id @default(uuid())
+  workflowId  String
+  version     Int
+  status      WorkflowVersionStatus @default(draft)
+  nodesJson   Json
+  edgesJson   Json
+  message     String?
+  createdBy   String
+  createdAt   DateTime @default(now())
+
+  workflow    Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@unique([workflowId, version])
+  @@index([workflowId])
+}
+
+enum WorkflowVersionStatus {
+  draft
+  published
+}
+
+/// Tracks community/marketplace node packages installed on this instance.
+model CommunityNode {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  version     String
+  description String
+  author      String?
+  homepage    String?
+  nodeTypes   Json
+  source      String   // 'registry' | 'npm' | 'local'
+  installedBy String
+  installedAt DateTime @default(now())
+}
+
+enum CredentialAuthType {
+  apiKey
+  oauth2
+}
+
+enum SharePermission {
+  use
+  manage
+}
+
+model CredentialFolder {
+  id          String       @id @default(uuid())
+  userId      String
+  name        String
+  createdAt   DateTime     @default(now())
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  credentials Credential[]
 
   @@index([userId])
 }
 
 model Credential {
-  id            String   @id @default(uuid())
-  userId        String
-  type          String
-  encryptedData String
-  createdAt     DateTime @default(now())
+  id              String             @id @default(uuid())
+  userId          String
+  name            String             @default("Untitled credential")
+  type            String
+  authType        CredentialAuthType @default(apiKey)
+  encryptedData   String
+  folderId        String?
+  oauthProvider   String?
+  oauthExpiresAt  DateTime?
+  lastTestedAt    DateTime?
+  lastTestOk      Boolean?
+  lastTestMessage String?
+  createdAt       DateTime           @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user   User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  folder CredentialFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  shares CredentialShare[]
 
   @@index([userId])
+  @@index([folderId])
+}
+
+model CredentialShare {
+  id               String          @id @default(uuid())
+  credentialId     String
+  sharedWithUserId String
+  permission       SharePermission @default(use)
+  createdAt        DateTime        @default(now())
+
+  credential     Credential @relation(fields: [credentialId], references: [id], onDelete: Cascade)
+  sharedWithUser User       @relation(fields: [sharedWithUserId], references: [id], onDelete: Cascade)
+
+  @@unique([credentialId, sharedWithUserId])
+  @@index([sharedWithUserId])
 }
 
 enum ExecutionStatus {
   running
   success
   failed
+  paused
 }
 
 enum TriggerType {
@@ -64,7 +286,11 @@ model Execution {
   status      ExecutionStatus @default(running)
   startedAt   DateTime        @default(now())
   finishedAt  DateTime?
+  pausedAt    DateTime?
   triggerType TriggerType
+  checkpoint   Json?
+  resumeToken  String?         @unique
+  resumeNodeId String?
 
   workflow Workflow            @relation(fields: [workflowId], references: [id], onDelete: Cascade)
   nodeRuns ExecutionNodeRun[]

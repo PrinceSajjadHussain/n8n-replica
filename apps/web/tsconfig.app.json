@@ -22,5 +22,14 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx"
+  ],
+  "exclude": [
+    "src/apps/**",
+    "src/packages/**",
+    "src/services/**",
+    "src/docs/**"
+  ]
 }
