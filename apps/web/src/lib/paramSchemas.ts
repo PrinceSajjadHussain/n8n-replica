@@ -150,6 +150,78 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
     ],
   },
 
+  redisMemory: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'read',
+        options: [
+          { value: 'read', label: 'Read (recent turns + historyText)' },
+          { value: 'write', label: 'Write (append turn(s))' },
+          { value: 'clear', label: 'Clear session history' },
+        ],
+      },
+      {
+        key: 'sessionId',
+        label: 'Session ID',
+        type: 'expression',
+        default: '{{$json.sessionId}}',
+        help: 'Usually the chatTrigger\u2019s sessionId, so history is scoped per conversation.',
+      },
+      {
+        key: 'maxTurns',
+        label: 'Max turns to read',
+        type: 'number',
+        default: 20,
+        min: 1,
+        max: 200,
+        step: 1,
+        visibleIf: (p) => (p.action ?? 'read') === 'read',
+      },
+      {
+        key: 'role',
+        label: 'Role',
+        type: 'enum',
+        default: 'user',
+        options: [
+          { value: 'user', label: 'user' },
+          { value: 'assistant', label: 'assistant' },
+          { value: 'system', label: 'system' },
+        ],
+        visibleIf: (p) => p.action === 'write',
+        help: 'Single-turn shorthand. For writing both the user message and the model reply in one call, use "turns" in Raw JSON instead.',
+      },
+      {
+        key: 'content',
+        label: 'Content',
+        type: 'expression',
+        visibleIf: (p) => p.action === 'write',
+      },
+      {
+        key: 'maxHistory',
+        label: 'Max history to retain',
+        type: 'number',
+        default: 100,
+        min: 1,
+        max: 2000,
+        step: 1,
+        visibleIf: (p) => p.action === 'write',
+        help: 'Older turns beyond this count are trimmed automatically.',
+      },
+      {
+        key: 'ttlSeconds',
+        label: 'Session TTL (seconds)',
+        type: 'number',
+        min: 0,
+        step: 1,
+        visibleIf: (p) => p.action === 'write',
+        help: 'Optional. Leave 0/empty to keep history forever.',
+      },
+    ],
+  },
+
   chatTrigger: {
     fields: [
       { key: 'path', label: 'Chat path', type: 'string', default: 'default', help: 'Matches the :path segment in POST /chat/:workflowId/:path.' },

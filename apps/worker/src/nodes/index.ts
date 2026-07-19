@@ -18,6 +18,7 @@ import './moreIntegrations';
 import './businessIntegrations';
 import './cloudIntegrations';
 import './agentNode';
+import './redisMemoryNode';
 import './emailNode';
 import './googleSheetsNode';
 import './dataTableNode';

@@ -83,8 +83,11 @@ external DB access from a workflow)
 **AI / agents** — `openai` (chat completions), `anthropic` (Claude Messages API),
 `gemini` (Google Gemini `generateContent` + `text-embedding-004`), `agent` (tool-using
 agent with short-term + long-term/vector memory), `agentMemory` (manual session memory
-read/write/clear/recall), `agentOrchestrator` (planner → sub-agents → reviewer pipeline,
-shared memory, reasoning trace)
+read/write/clear/recall, persisted to local disk), `redisMemory` (manual session
+conversation history read/write/clear via Redis — the multi-instance-safe alternative to
+`agentMemory` for simple chatTrigger → LLM chat flows that don't need vector recall; see
+"Chatbot: Gemini + Redis conversation memory" below), `agentOrchestrator` (planner →
+sub-agents → reviewer pipeline, shared memory, reasoning trace)
 
 **RAG** — `ragIngest`, `ragQuery`: real document loaders (PDF/DOCX/CSV/HTML/website
 crawler/Google Drive/Notion/Confluence), fixed/token-aware/markdown-aware/semantic
@@ -1433,3 +1436,68 @@ ANTHROPIC_API_KEY=                    # fallback if a node has no "anthropic" cr
 - Cost tracking / token-spend dashboards for AI nodes were scoped out of Phase 4/5 for
   time; `anthropic`/`openai` node output already includes `usage`, so a cost rollup is a
   natural follow-up against data that's already there.
+
+## Redis chat memory + Gemini chatbot template (this round)
+
+Goal: give `chatTrigger` a Redis-backed conversation-memory option and ship a working
+Gemini chatbot template, since `agentMemory` only persists to local disk (not shared
+across worker replicas) and there was no ready-made chatTrigger → LLM → memory template
+in the gallery.
+
+### What changed
+
+- **`apps/worker/src/nodes/redisMemoryNode.ts`** *(new)* — a `redisMemory` node plugin
+  with `read` / `write` / `clear` actions, keyed by `sessionId` in Redis (reuses the same
+  `REDIS_URL` already configured for the execution queue — see `apps/worker/src/queue.ts`
+  for the connection pattern this follows). `read` returns both the raw `turns` array and
+  a ready-to-splice `historyText` string; `write` appends one turn (`role`/`content`) or
+  several at once (`turns: [...]`), auto-trims to `maxHistory` (default 100), and supports
+  an optional `ttlSeconds` expiry. The `write` action also echoes the assistant turn just
+  saved as `reply`, so a chat workflow that ends on this node returns the actual answer
+  text in the `POST /chat/:workflowId/:path` response body, not just a write confirmation.
+- **`apps/worker/src/nodes/index.ts`** — registers the new node (one-line import, same
+  pattern as every other built-in node).
+- **`packages/shared-types/src/index.ts`** — added `'redisMemory'` to the `NodeType`
+  union.
+- **`apps/web/src/lib/nodeTypeMeta.ts`** — icon/label/category entry so it shows up in the
+  node palette like every other AI node.
+- **`apps/web/src/lib/paramSchemas.ts`** — a schema-driven form (Action / Session ID /
+  Content / Max turns / Max history / TTL, with `visibleIf` toggling fields per action),
+  following the "Schema-driven config sidebar" pattern above instead of leaving it on the
+  raw-JSON-only fallback.
+- **`apps/api/src/routes/templates.ts`** — new template `gemini-chat-with-redis-memory`
+  ("Chatbot: Gemini + Redis conversation memory", category `AI`): `chatTrigger` → `redisMemory`
+  (read) → `gemini` → `redisMemory` (write), with the Gemini prompt already wired to splice
+  in both the read node's `historyText` and the trigger's `message` via
+  `{{$node["Label"].json.field}}` expressions. Also added `gemini: 'Gemini'` to that file's
+  node-type→credential-label map so the template's "Needs: Gemini" chip renders correctly
+  (previously only used by templates with `openai`/`anthropic` nodes). Template count: 36 → 37.
+- **`docs/chatbot-gemini-redis-memory.md`** *(new)* — setup steps, the exact mock
+  input/output JSON for testing each of the four nodes in isolation via "Run this node in
+  isolation", an end-to-end two-message test that proves memory round-trips through Redis
+  (not just that the model answered something plausible), and a short list of concrete
+  failure modes tied to specific error strings.
+
+### Why `redisMemory` instead of extending `agentMemory`
+
+`agentMemory` also does OpenAI-embedding-based long-term semantic recall, which needs an
+OpenAI key regardless of which chat model you're actually using — awkward for a
+Gemini-only chatbot. `redisMemory` is deliberately simpler (short-term history only, no
+embeddings, no extra API key) and shared across worker instances by construction, since
+it's real Redis rather than a file on whichever worker happened to handle the request.
+`agentMemory`/`agent` are unchanged and remain the right choice when long-term vector
+recall across hundreds of turns is actually needed.
+
+### Not verified by an actual build in this pass
+
+Unlike the "Schema-driven config sidebar" and other phases above, this pass was **not**
+run through a live `pnpm install` / `tsc -b` / `docker compose up` — the environment this
+change was made in has no network access, so nothing could be installed or executed. What
+was checked instead: brace/paren balance on every edited file, that every new expression
+(`{{$node["Label"].json.field}}`) matches the real resolution order in
+`apps/worker/src/engine/executor.ts` (params are expression-resolved before a node's
+`execute()` runs), and that the new template's node/edge JSON matches the exact
+`WorkflowNode`/`WorkflowEdge` shape `packages/shared-types` and the executor expect. Treat
+this section's claims as "should work, reviewed by hand" rather than "build-verified" like
+the phases above — run `pnpm install && pnpm dev` and try the template for real before
+relying on it in production.

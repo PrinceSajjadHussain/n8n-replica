@@ -92,6 +92,7 @@ export type NodeType =
   | 'streamTrigger'
   | 'chatTrigger'
   | 'agentMemory'
+  | 'redisMemory'
   | 'agent'
   | 'agentOrchestrator'
   | 'dataTableRead'

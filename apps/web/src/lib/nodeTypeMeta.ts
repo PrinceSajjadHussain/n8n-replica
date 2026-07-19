@@ -76,6 +76,7 @@ export const NODE_TYPES: NodeTypeMeta[] = [
   { type: 'ragQuery', label: 'RAG: Query', category: 'AI', icon: '🔎', iconKey: 'lucide:Search', color: '#10A37F' },
   { type: 'agent', label: 'AI Agent', category: 'AI', icon: '🤖', iconKey: 'lucide:Bot', color: '#10A37F' },
   { type: 'agentMemory', label: 'Agent Memory', category: 'AI', icon: '🧠', iconKey: 'lucide:Brain', color: '#10A37F' },
+  { type: 'redisMemory', label: 'Redis Chat Memory', category: 'AI', icon: '🗄', iconKey: 'lucide:Database', color: '#10A37F' },
   { type: 'agentOrchestrator', label: 'Multi-Agent Orchestrator', category: 'AI', icon: '🕸', iconKey: 'lucide:Share2', color: '#10A37F' },
   { type: 'browserAutomation', label: 'Browser Automation', category: 'AI', icon: '🖥', iconKey: 'lucide:MonitorSmartphone', color: '#10A37F' },
 ];

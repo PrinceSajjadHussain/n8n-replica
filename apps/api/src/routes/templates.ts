@@ -48,6 +48,7 @@ const CREDENTIAL_TYPE_BY_NODE_TYPE: Record<string, string> = {
   agent: 'OpenAI',
   agentMemory: 'OpenAI',
   agentOrchestrator: 'OpenAI',
+  gemini: 'Gemini',
 };
 
 // Templates are listed oldest-first; array index doubles as a stable "added
@@ -1093,6 +1094,68 @@ const TEMPLATES: Template[] = [
       edges: [
         { id: 'e1', source: 't1', target: 't2' },
         { id: 'e2', source: 't2', target: 't3' },
+      ],
+    },
+  },
+  {
+    id: 'gemini-chat-with-redis-memory',
+    name: 'Chatbot: Gemini + Redis conversation memory',
+    description:
+      'Chat trigger reads recent history from Redis, asks Gemini for a reply using that history, then saves the new turn back to Redis — multi-turn memory that works across worker instances.',
+    category: 'AI',
+    difficulty: 'intermediate',
+    estimatedSetupMinutes: 8,
+    usageCount: 0,
+    graph: {
+      nodes: [
+        {
+          id: 't1',
+          type: 'chatTrigger',
+          label: 'When chat message received',
+          position: { x: 0, y: 0 },
+          params: { path: 'default', responseMode: 'lastNode' },
+        },
+        {
+          id: 't2',
+          type: 'redisMemory',
+          label: 'Read Memory',
+          position: { x: 280, y: 0 },
+          params: { action: 'read', sessionId: '{{$json.sessionId}}', maxTurns: 20 },
+        },
+        {
+          id: 't3',
+          type: 'gemini',
+          label: 'Gemini Reply',
+          position: { x: 560, y: 0 },
+          params: {
+            model: 'gemini-2.0-flash',
+            systemPrompt: 'You are a helpful, friendly assistant. Use the conversation history for context.',
+            prompt:
+              'Conversation so far (may be empty for a new chat):\n{{$node["Read Memory"].json.historyText}}\n\nUser: {{$node["When chat message received"].json.message}}',
+            temperature: 0.4,
+            maxOutputTokens: 1024,
+          },
+        },
+        {
+          id: 't4',
+          type: 'redisMemory',
+          label: 'Save Memory',
+          position: { x: 840, y: 0 },
+          params: {
+            action: 'write',
+            sessionId: '{{$node["When chat message received"].json.sessionId}}',
+            turns: [
+              { role: 'user', content: '{{$node["When chat message received"].json.message}}' },
+              { role: 'assistant', content: '{{$node["Gemini Reply"].json.text}}' },
+            ],
+            maxHistory: 100,
+          },
+        },
+      ],
+      edges: [
+        { id: 'e1', source: 't1', target: 't2' },
+        { id: 'e2', source: 't2', target: 't3' },
+        { id: 'e3', source: 't3', target: 't4' },
       ],
     },
   },
