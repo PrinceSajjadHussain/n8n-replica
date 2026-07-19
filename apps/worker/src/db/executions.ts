@@ -60,7 +60,7 @@ export async function getVariablesMapForWorkflow(workflowId: string): Promise<Re
 
 export async function createExecution(
   workflowId: string,
-  triggerType: 'manual' | 'webhook' | 'schedule' | 'emailTrigger' | 'fileWatcher' | 'databaseChange' | 'streamTrigger',
+  triggerType: 'manual' | 'webhook' | 'chatTrigger' | 'schedule' | 'emailTrigger' | 'fileWatcher' | 'databaseChange' | 'streamTrigger',
   presetId?: string
 ): Promise<string> {
   const id = presetId ?? randomUUID();

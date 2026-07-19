@@ -62,10 +62,13 @@ modes" below), `dataTableRead` / `dataTableWrite` (see "Data persistence primiti
 below), `fileExtract` / `fileConvert` (CSV/JSON/text ↔ items, see "Binary/file data
 support" below)
 
-**Triggers** — `webhook`, `schedule`, `emailTrigger` (real IMAP via `imapflow`, IDLE push
-with polling fallback), `fileWatcher` (`fs.watch`), `databaseChange` (Postgres
-LISTEN/NOTIFY), `streamTrigger` (Redis Streams consumer group, plus native Kafka and
-RabbitMQ consumers registered the same way — see "Triggers beyond webhook/schedule" below)
+**Triggers** — `webhook`, `chatTrigger` (chat-message trigger over `POST
+/chat/:workflowId/:path`, holds the connection open and replies with the workflow's
+output — the standard front door for a PDF-RAG chatbot, see `docs/rag.md`), `schedule`,
+`emailTrigger` (real IMAP via `imapflow`, IDLE push with polling fallback), `fileWatcher`
+(`fs.watch`), `databaseChange` (Postgres LISTEN/NOTIFY), `streamTrigger` (Redis Streams
+consumer group, plus native Kafka and RabbitMQ consumers registered the same way — see
+"Triggers beyond webhook/schedule" below)
 
 **Messaging / collaboration** — `slack`, `discord`, `telegram`, `whatsapp` (Meta Cloud
 API), `notion`, `github`
@@ -77,16 +80,18 @@ calls), `hubspot`, `salesforce`, `shopify`
 `gmail`, `googleCalendar`, `googleSheets` *(stub — see below)*, `postgres` (arbitrary
 external DB access from a workflow)
 
-**AI / agents** — `openai` (chat completions), `agent` (tool-using agent with short-term +
-long-term/vector memory), `agentMemory` (manual session memory read/write/clear/recall),
-`agentOrchestrator` (planner → sub-agents → reviewer pipeline, shared memory, reasoning
-trace)
+**AI / agents** — `openai` (chat completions), `anthropic` (Claude Messages API),
+`gemini` (Google Gemini `generateContent` + `text-embedding-004`), `agent` (tool-using
+agent with short-term + long-term/vector memory), `agentMemory` (manual session memory
+read/write/clear/recall), `agentOrchestrator` (planner → sub-agents → reviewer pipeline,
+shared memory, reasoning trace)
 
 **RAG** — `ragIngest`, `ragQuery`: real document loaders (PDF/DOCX/CSV/HTML/website
 crawler/Google Drive/Notion/Confluence), fixed/token-aware/markdown-aware/semantic
 chunking, pluggable vector store (JSON file / pgvector / Pinecone / Qdrant / Weaviate),
-hybrid (BM25 + vector) search with reranking, metadata filtering, and a citation viewer —
-see `docs/rag.md`
+pluggable embedding + answer provider (OpenAI / Gemini, plus Anthropic for the answer
+step), hybrid (BM25 + vector) search with reranking, metadata filtering, and a citation
+viewer — see `docs/rag.md`
 
 **Browser automation** — `browserAutomation` (drives the optional `browser-runner`
 sidecar for real headless-Chrome scripting; see `docs/browser-automation.md`)

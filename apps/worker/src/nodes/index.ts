@@ -8,6 +8,7 @@ import './mergeNode';
 import './slackNode';
 import './openaiNode';
 import './anthropicNode';
+import './geminiNode';
 import './ragNode';
 import './browserAutomationNode';
 import './switchNode';

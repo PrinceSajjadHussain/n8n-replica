@@ -73,9 +73,32 @@ export const streamTriggerNode: NodePlugin = {
   },
 };
 
+/**
+ * Chat trigger — no-op at execution time, same pattern as `webhook`. The
+ * engine seeds `input` with `{ sessionId, message, attachments }` when a
+ * request hits `POST /chat/:workflowId/:path` (apps/api/src/routes/chat.ts).
+ * That route holds the HTTP connection open and always waits for the run to
+ * finish (chat needs a reply), returning the workflow's final output — or a
+ * "Respond to Webhook" node's payload if one is used to shape the reply —
+ * as `{ reply }`.
+ *
+ * This is the standard way to wire a PDF-RAG chatbot: chatTrigger ->
+ * ragQuery (namespace matching a prior ragIngest run, answerWithModel:
+ * true) -> the query's `answer`/`citations` become the reply. Add an
+ * `agentMemory` node beforehand (action: "read", sessionId: {{input.sessionId}})
+ * to give the same conversation short-term recall across turns.
+ */
+export const chatTriggerNode: NodePlugin = {
+  type: 'chatTrigger',
+  async execute({ input }) {
+    return { output: input ?? { sessionId: null, message: '', attachments: [] } };
+  },
+};
+
 registerNode(webhookNode);
 registerNode(scheduleNode);
 registerNode(emailTriggerNode);
 registerNode(fileWatcherNode);
 registerNode(databaseChangeNode);
 registerNode(streamTriggerNode);
+registerNode(chatTriggerNode);

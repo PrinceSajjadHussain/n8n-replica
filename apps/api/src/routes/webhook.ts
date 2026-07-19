@@ -8,7 +8,7 @@ import { randomUUID } from 'crypto';
 import { incrementUsage } from '../db/billing';
 
 const redisConnection = createRedisConnection();
-const executionQueue = createExecutionQueue(redisConnection);
+export const executionQueue = createExecutionQueue(redisConnection);
 
 export const webhookRouter = Router();
 
@@ -60,7 +60,7 @@ const DEFAULT_WEBHOOK_TIMEOUT_MS = Number(process.env.WEBHOOK_RESPONSE_TIMEOUT_M
  * Both give up after `timeoutMs` and respond 504 rather than hanging the
  * HTTP connection forever.
  */
-function waitForWebhookResponse(
+export function waitForWebhookResponse(
   executionId: string,
   mode: 'lastNode' | 'responseNode',
   timeoutMs: number

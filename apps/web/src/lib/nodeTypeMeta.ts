@@ -39,6 +39,7 @@ export interface NodeTypeMeta {
 export const NODE_TYPES: NodeTypeMeta[] = [
   { type: 'webhook', label: 'Webhook', category: 'Trigger', icon: '⚡', iconKey: 'lucide:Webhook', color: '#F59E0B' },
   { type: 'schedule', label: 'Schedule', category: 'Trigger', icon: '⏱', iconKey: 'lucide:Clock', color: '#F59E0B' },
+  { type: 'chatTrigger', label: 'Chat Message', category: 'Trigger', icon: '💬', iconKey: 'lucide:MessageCircle', color: '#F59E0B' },
 
   { type: 'if', label: 'IF', category: 'Logic', icon: '⑂', iconKey: 'lucide:GitBranch', color: '#8B5CF6' },
   { type: 'switch', label: 'Switch / Router', category: 'Logic', icon: '🔀', iconKey: 'lucide:Shuffle', color: '#8B5CF6' },
@@ -70,6 +71,7 @@ export const NODE_TYPES: NodeTypeMeta[] = [
 
   { type: 'openai', label: 'OpenAI', category: 'AI', icon: '✨', iconKey: 'si:siOpenai', color: '#10A37F' },
   { type: 'anthropic', label: 'Anthropic (Claude)', category: 'AI', icon: '✨', iconKey: 'si:siAnthropic', color: '#D97757' },
+  { type: 'gemini', label: 'Google Gemini', category: 'AI', icon: '✨', iconKey: 'si:siGooglegemini', color: '#4285F4' },
   { type: 'ragIngest', label: 'RAG: Ingest', category: 'AI', icon: '📥', iconKey: 'lucide:FileInput', color: '#10A37F' },
   { type: 'ragQuery', label: 'RAG: Query', category: 'AI', icon: '🔎', iconKey: 'lucide:Search', color: '#10A37F' },
   { type: 'agent', label: 'AI Agent', category: 'AI', icon: '🤖', iconKey: 'lucide:Bot', color: '#10A37F' },

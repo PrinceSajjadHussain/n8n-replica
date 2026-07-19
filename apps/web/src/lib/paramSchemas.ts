@@ -133,6 +133,39 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
     ],
   },
 
+  gemini: {
+    fields: [
+      { key: 'model', label: 'Model', type: 'string', default: 'gemini-2.0-flash', placeholder: 'gemini-2.0-flash' },
+      { key: 'systemPrompt', label: 'System prompt', type: 'text', help: 'Optional system instruction.' },
+      {
+        key: 'prompt',
+        label: 'Prompt',
+        type: 'expression',
+        default: '{{input}}',
+        help: 'Use {{input}} to splice in the upstream node\u2019s JSON output.',
+      },
+      { key: 'temperature', label: 'Temperature', type: 'number', default: 0.3, min: 0, max: 1, step: 0.1 },
+      { key: 'maxOutputTokens', label: 'Max output tokens', type: 'number', default: 2048, min: 1, max: 8192, step: 1 },
+      { key: 'jsonMode', label: 'JSON mode', type: 'boolean', default: false, help: 'Ask Gemini to return raw JSON; parsed result lands in output.parsed.' },
+    ],
+  },
+
+  chatTrigger: {
+    fields: [
+      { key: 'path', label: 'Chat path', type: 'string', default: 'default', help: 'Matches the :path segment in POST /chat/:workflowId/:path.' },
+      {
+        key: 'responseMode',
+        label: 'Response mode',
+        type: 'enum',
+        default: 'lastNode',
+        options: [
+          { value: 'lastNode', label: 'Reply with final node output (default)' },
+          { value: 'responseNode', label: 'Reply via a "Respond to Webhook" node' },
+        ],
+      },
+    ],
+  },
+
   slack: {
     fields: [
       { key: 'text', label: 'Message text', type: 'expression', placeholder: 'New order received!' },

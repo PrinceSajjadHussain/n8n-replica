@@ -87,6 +87,27 @@ agnostic. See `.env.example` for each backend's connection config.
   Execution History view — the answer with clickable `[n]` markers
   followed by the numbered source list.
 
+## Embedding / answer provider
+
+By default ingest and query embed with OpenAI's `text-embedding-3-small`.
+Set `params.embeddingProvider: "gemini"` on `ragIngest`/`ragQuery` to embed
+with Gemini's `text-embedding-004` instead (via a `gemini` credential or
+`GEMINI_API_KEY`). Independently, `ragQuery`'s `params.answerProvider`
+(`"openai"` default | `"gemini"` | `"anthropic"`) picks which model drafts
+`answer` when `answerWithModel: true` — so, for example, you can embed with
+OpenAI but have Gemini or Claude write the final cited answer. See
+`apps/worker/src/nodes/geminiNode.ts` for the Gemini chat/embedding calls.
+
+## Chatting with your documents
+
+The `chatTrigger` node (`apps/worker/src/nodes/triggerNodes.ts`, fired via
+`POST /chat/:workflowId/:path`, see `apps/api/src/routes/chat.ts`) is the
+standard front door for a PDF-RAG chatbot: `chatTrigger -> ragQuery
+(answerWithModel: true) -> reply`. It always waits for the run to finish and
+replies with `{ reply, sessionId, executionId }`, threading `sessionId`
+through so an `agentMemory` node can give the same conversation short-term
+history and long-term vector recall across turns.
+
 ## Example
 
 ```json

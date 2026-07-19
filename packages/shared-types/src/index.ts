@@ -60,6 +60,7 @@ export type NodeType =
   | 'googleSheets'
   | 'openai'
   | 'anthropic'
+  | 'gemini'
   | 'ragIngest'
   | 'ragQuery'
   | 'browserAutomation'
@@ -89,6 +90,7 @@ export type NodeType =
   | 'fileWatcher'
   | 'databaseChange'
   | 'streamTrigger'
+  | 'chatTrigger'
   | 'agentMemory'
   | 'agent'
   | 'agentOrchestrator'
@@ -169,7 +171,7 @@ export interface ExecutionJobData {
   executionId: string;
   workflowId: string;
   userId: string;
-  triggerType: 'manual' | 'webhook' | 'schedule' | 'emailTrigger' | 'fileWatcher' | 'databaseChange' | 'streamTrigger' | 'test';
+  triggerType: 'manual' | 'webhook' | 'chatTrigger' | 'schedule' | 'emailTrigger' | 'fileWatcher' | 'databaseChange' | 'streamTrigger' | 'test';
   triggerPayload?: unknown;
 }
 

@@ -16,6 +16,10 @@
     "prisma:migrate:deploy": "npm run prisma:migrate:deploy --workspace=@flowforge/api"
   },
   "devDependencies": {
+    "prisma": "^7.8.0",
     "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "@prisma/client": "^7.8.0"
   }
 }
