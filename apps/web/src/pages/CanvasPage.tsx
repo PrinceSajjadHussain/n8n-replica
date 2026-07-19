@@ -32,8 +32,12 @@ import CollabPanel from '../components/CollabPanel';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useIsMobile } from '../lib/useMediaQuery';
 import MobileExecutionMonitorPage from './MobileExecutionMonitorPage';
+import { toast } from '../store/toastStore';
+import PelletEdge from '../components/PelletEdge';
+import ExecutionScrubber, { type ExecutionSummary, type HistoryNodeRun } from '../components/ExecutionScrubber';
 
 const nodeTypes = { flowNode: FlowNode, stickyNote: StickyNoteNode, group: GroupNode };
+const edgeTypes = { default: PelletEdge };
 let idCounter = 0;
 function nextId() {
   idCounter += 1;
@@ -87,6 +91,11 @@ function CanvasPageDesktop() {
     }
   }
   const [runBanner, setRunBanner] = useState<string | null>(null);
+  const [activeExecutionId, setActiveExecutionId] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [replayExecution, setReplayExecution] = useState<ExecutionSummary | null>(null);
+  const [replayNodeRuns, setReplayNodeRuns] = useState<Record<string, HistoryNodeRun> | null>(null);
   const [aiModalOpen, setAiModalOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
@@ -215,6 +224,7 @@ function CanvasPageDesktop() {
     socket.on('execution:started', (e: any) => {
       if (e.workflowId !== workflowId) return;
       setRunBanner('Execution running…');
+      setActiveExecutionId(e.executionId ?? null);
       setNodes((nds) =>
         nds.map((n) => ({
           ...n,
@@ -261,8 +271,24 @@ function CanvasPageDesktop() {
     socket.on('execution:completed', (e: any) => {
       if (e.workflowId !== workflowId) return;
       setRunBanner('Execution finished — see history for details.');
+      setActiveExecutionId(null);
+      setCancelling(false);
       setEdges((eds) => eds.map((edge) => ({ ...edge, animated: false, style: undefined })));
       setTimeout(() => setRunBanner(null), 4000);
+      if (e.status === 'failed') {
+        toast.error('Execution failed');
+      } else {
+        toast.success('Execution finished');
+      }
+    });
+    socket.on('execution:cancelled', (e: any) => {
+      if (e.workflowId !== workflowId) return;
+      setRunBanner('Execution cancelled.');
+      setActiveExecutionId(null);
+      setCancelling(false);
+      setEdges((eds) => eds.map((edge) => ({ ...edge, animated: false, style: undefined })));
+      setTimeout(() => setRunBanner(null), 4000);
+      toast.info('Execution cancelled');
     });
 
     // Presence: viewer avatars + live cursor dots, scoped to this workflow's
@@ -322,10 +348,17 @@ function CanvasPageDesktop() {
     (changes: EdgeChange[]) => setEdges((eds) => applyEdgeChanges(changes, eds)),
     []
   );
-  const onConnect = useCallback(
-    (connection: Connection) => setEdges((eds) => addEdge({ ...connection, id: `e_${Date.now()}` }, eds)),
-    []
-  );
+  const onConnect = useCallback((connection: Connection) => {
+    const id = `e_${Date.now()}`;
+    // Micro-interaction: briefly tag the just-drawn edge so it gets a
+    // glow/thickness pulse (see .edge-connect-pulse in index.css), then
+    // strip the class once the animation has played so it doesn't replay
+    // on every unrelated re-render.
+    setEdges((eds) => addEdge({ ...connection, id, className: 'edge-connect-pulse' }, eds));
+    setTimeout(() => {
+      setEdges((eds) => eds.map((e) => (e.id === id ? { ...e, className: undefined } : e)));
+    }, 600);
+  }, []);
 
   function addNode(nodeType: string, label: string) {
     const id = nextId();
@@ -393,6 +426,57 @@ function CanvasPageDesktop() {
     setNodes((nds) => autoLayout(nds, edges));
   }
 
+  /** Called by ExecutionScrubber whenever the user steps to a different
+   *  past execution — stashes that run's per-node results so displayNodes
+   *  can paint them onto the canvas without touching the live `nodes`
+   *  state (so nothing is lost when the user exits replay). */
+  function handleReplay(execution: ExecutionSummary, nodeRuns: HistoryNodeRun[]) {
+    setReplayExecution(execution);
+    const byNode: Record<string, HistoryNodeRun> = {};
+    for (const run of nodeRuns) byNode[run.nodeId] = run;
+    setReplayNodeRuns(byNode);
+  }
+
+  function exitReplay() {
+    setHistoryOpen(false);
+    setReplayExecution(null);
+    setReplayNodeRuns(null);
+  }
+
+  /** Canvas nodes actually handed to <ReactFlow>: identical to `nodes`
+   *  outside of replay, or overlaid with a past execution's per-node
+   *  status/timing/input/output while the scrubber is active. Nodes that
+   *  didn't run in that execution (e.g. added since, or on a skipped
+   *  branch) fall back to 'idle' rather than showing stale live data. */
+  const displayNodes = useMemo(() => {
+    if (!replayNodeRuns) return nodes;
+    return nodes.map((n) => {
+      const run = replayNodeRuns[n.id];
+      if (!run) {
+        return { ...n, data: { ...n.data, status: 'idle' as NodeStatus, lastRunOutput: undefined, lastRunError: undefined } };
+      }
+      const durationMs =
+        run.startedAt && run.finishedAt
+          ? new Date(run.finishedAt).getTime() - new Date(run.startedAt).getTime()
+          : undefined;
+      const status: NodeStatus =
+        run.status === 'success' || run.status === 'failed' || run.status === 'skipped' || run.status === 'running'
+          ? (run.status as NodeStatus)
+          : 'idle';
+      return {
+        ...n,
+        data: {
+          ...n.data,
+          status,
+          lastRunInput: run.input,
+          lastRunOutput: run.output,
+          lastRunError: run.error ?? undefined,
+          lastRunDurationMs: durationMs,
+        },
+      };
+    });
+  }, [nodes, replayNodeRuns]);
+
   const selectedNode = useMemo(
     () => nodes.find((n) => n.id === selectedNodeId) ?? null,
     [nodes, selectedNodeId]
@@ -407,9 +491,11 @@ function CanvasPageDesktop() {
 
   function deleteSelectedNode() {
     if (!selectedNodeId) return;
+    const removed = nodes.find((n) => n.id === selectedNodeId);
     setNodes((nds) => nds.filter((n) => n.id !== selectedNodeId));
     setEdges((eds) => eds.filter((e) => e.source !== selectedNodeId && e.target !== selectedNodeId));
     setSelectedNodeId(null);
+    if (removed) toast.info(`Deleted "${(removed.data as FlowNodeData).label ?? removed.id}"`);
   }
 
   // Undo/redo history — snapshots nodes+edges on every change (skipped
@@ -460,6 +546,7 @@ function CanvasPageDesktop() {
         selected: false,
       },
     ]);
+    toast.info(`Duplicated "${(original.data as FlowNodeData).label ?? original.id}"`);
   }
 
   // Keyboard shortcuts: Ctrl/Cmd+S save, Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z
@@ -541,10 +628,16 @@ function CanvasPageDesktop() {
       target: e.target,
       sourceHandle: e.sourceHandle ?? null,
     }));
-    await api.put(`/workflows/${workflowId}`, { name, nodes: nodesPayload, edges: edgesPayload });
-    await api.post(`/workflows/${workflowId}/versions`, { nodesJson: nodesPayload, edgesJson: edgesPayload });
-    setSaveState('saved');
-    setTimeout(() => setSaveState('idle'), 1500);
+    try {
+      await api.put(`/workflows/${workflowId}`, { name, nodes: nodesPayload, edges: edgesPayload });
+      await api.post(`/workflows/${workflowId}/versions`, { nodesJson: nodesPayload, edgesJson: edgesPayload });
+      setSaveState('saved');
+      setTimeout(() => setSaveState('idle'), 1500);
+    } catch (err: any) {
+      setSaveState('idle');
+      toast.error(err?.response?.data?.error ?? 'Failed to save workflow');
+      throw err;
+    }
   }
 
   async function handleToggleActive() {
@@ -606,9 +699,33 @@ function CanvasPageDesktop() {
   }
 
   async function handleRun() {
-    await handleSave();
-    await api.post(`/workflows/${workflowId}/execute`, {});
-    setRunBanner('Execution enqueued…');
+    try {
+      await handleSave();
+    } catch {
+      return; // handleSave already surfaced a toast
+    }
+    try {
+      const res = await api.post(`/workflows/${workflowId}/execute`, {});
+      setActiveExecutionId(res.data?.executionId ?? null);
+      setRunBanner('Execution enqueued…');
+      toast.info('Run started');
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error ?? 'Failed to start run');
+    }
+  }
+
+  async function handleCancel() {
+    if (!activeExecutionId || cancelling) return;
+    setCancelling(true);
+    try {
+      await api.post(`/executions/${activeExecutionId}/cancel`, {});
+      // Don't clear activeExecutionId/cancelling here — the worker still
+      // needs to unwind in-flight nodes, so wait for the execution:cancelled
+      // socket event (which also flips the banner/edges) to confirm it landed.
+    } catch (err: any) {
+      setCancelling(false);
+      toast.error(err?.response?.data?.error ?? 'Failed to cancel execution');
+    }
   }
 
   async function doDiscard() {
@@ -621,6 +738,7 @@ function CanvasPageDesktop() {
     if (!workflowId) return;
     await api.delete(`/workflows/${workflowId}`);
     setDeleteOpen(false);
+    toast.info(`Deleted workflow "${name}"`);
     navigate('/workflows');
   }
 
@@ -681,6 +799,11 @@ function CanvasPageDesktop() {
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end ml-auto w-full sm:w-auto">
           {runBanner && <span className="text-xs text-amber mr-2">{runBanner}</span>}
+          {replayExecution && (
+            <span className="text-xs text-signal mr-2">
+              Viewing replay · {replayExecution.triggerType} · {replayExecution.status}
+            </span>
+          )}
           <button
             onClick={addStickyNote}
             title="Add sticky note"
@@ -727,6 +850,15 @@ function CanvasPageDesktop() {
           >
             History
           </Link>
+          <button
+            onClick={() => (historyOpen ? exitReplay() : setHistoryOpen(true))}
+            className={`focus-ring text-sm px-3 py-1.5 rounded-md border transition ${
+              historyOpen ? 'border-signal/40 text-signal bg-signal/10' : 'border-panelBorder text-muted hover:text-ink hover:border-signal/50'
+            }`}
+            title="Step through past executions on the canvas"
+          >
+            Replay
+          </button>
           <Link
             to={`/workflows/${workflowId}/tests`}
             className="focus-ring text-sm text-muted hover:text-ink px-3 py-1.5"
@@ -799,6 +931,16 @@ function CanvasPageDesktop() {
           >
             Run
           </button>
+          {activeExecutionId && (
+            <button
+              onClick={handleCancel}
+              disabled={cancelling}
+              title="Cancel this run"
+              className="focus-ring text-sm px-3 py-1.5 rounded-md border border-alert/40 text-alert hover:bg-alert/10 transition disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {cancelling ? 'Cancelling…' : 'Cancel run'}
+            </button>
+          )}
           <button
             onClick={() => setDeleteOpen(true)}
             className="focus-ring text-sm px-3 py-1.5 rounded-md border border-alert/40 text-alert hover:bg-alert/10 transition"
@@ -812,15 +954,19 @@ function CanvasPageDesktop() {
       <div className="flex-1 flex min-h-0">
         <NodePalette onAdd={addNode} />
         <div className="flex-1 min-w-0 relative" ref={canvasWrapperRef} onMouseMove={handleCanvasMouseMove}>
+          {historyOpen && workflowId && (
+            <ExecutionScrubber workflowId={workflowId} onReplay={handleReplay} onExit={exitReplay} />
+          )}
           <NodeDensityContext.Provider value={density}>
           <CredentialNamesContext.Provider value={credentialNames}>
           <ReactFlow
-            nodes={nodes}
+            nodes={displayNodes}
             edges={edges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
             onNodeClick={(_, node) => setSelectedNodeId(node.id)}
             onPaneClick={() => setSelectedNodeId(null)}
             colorMode="dark"
@@ -866,6 +1012,7 @@ function CanvasPageDesktop() {
             notes={(selectedNode.data.notes as string | null) ?? null}
             otherNodeLabels={nodes.filter((n) => n.id !== selectedNode.id).map((n) => n.data.label)}
             workflowId={workflowId}
+            replayExecutionId={replayExecution?.id}
             siblingWebhookPaths={nodes
               .filter((n) => n.id !== selectedNode.id && n.data.nodeType === 'webhook')
               .map((n) => String((n.data.params as Record<string, unknown> | undefined)?.path ?? ''))

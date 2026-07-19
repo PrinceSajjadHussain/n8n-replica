@@ -16,6 +16,7 @@ import {
 import { pool } from '../db/pool';
 import { createExecutionQueue, createRedisConnection } from '../queue/queue';
 import { registerScheduleForWorkflow, unregisterScheduleForWorkflow } from '../utils/scheduler';
+import { activateWorkflowPollers, deactivateWorkflowPollers } from '../utils/triggerActivation';
 import type { ExecutionJobData } from '@flowforge/shared-types';
 import { randomUUID } from 'crypto';
 import { requireWorkflowRole } from '../middleware/permissions';
@@ -156,6 +157,7 @@ workflowsRouter.delete('/:id', requireWorkflowRole('admin'), async (req: AuthedR
     const workflow = await getWorkflowById(req.params.id, req.userId!);
     const deleted = await deleteWorkflow(req.params.id, req.userId!);
     if (!deleted) return res.status(404).json({ error: 'Workflow not found' });
+    await deactivateWorkflowPollers(req.params.id);
     await logActivity({
       workspaceId: workflow?.workspaceId ?? null,
       userId: req.userId,
@@ -195,6 +197,12 @@ workflowsRouter.post('/:id/activate', requireWorkflowRole('editor'), async (req:
     );
   } else {
     await unregisterScheduleForWorkflow(workflow.id);
+  }
+
+  if (parsed.data.isActive) {
+    await activateWorkflowPollers(workflow.id, req.userId!);
+  } else {
+    await deactivateWorkflowPollers(workflow.id);
   }
 
   res.json({ workflow });
@@ -260,7 +268,7 @@ workflowsRouter.post('/:id/execute', async (req: AuthedRequest, res) => {
   const job = await executionQueue.add('execute', jobData);
   if (workflow.workspaceId) incrementUsage(workflow.workspaceId).catch(() => {});
 
-  res.status(202).json({ message: 'Execution enqueued', jobId: job.id });
+  res.status(202).json({ message: 'Execution enqueued', jobId: job.id, executionId: jobData.executionId });
 });
 
 workflowsRouter.get('/:id/executions', async (req: AuthedRequest, res) => {

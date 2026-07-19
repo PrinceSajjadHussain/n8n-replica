@@ -157,6 +157,9 @@ export function initRealtime(httpServer: HTTPServer): SocketIOServer {
         case 'completed':
           io.to(room).emit('execution:completed', event);
           break;
+        case 'cancelled':
+          io.to(room).emit('execution:cancelled', event);
+          break;
       }
     } catch (err) {
       console.error('Failed to relay realtime event', err);

@@ -73,7 +73,7 @@ export async function createExecution(
 
 export async function finishExecution(
   executionId: string,
-  status: 'success' | 'failed'
+  status: 'success' | 'failed' | 'cancelled'
 ): Promise<void> {
   await pool.query(
     `UPDATE "Execution" SET status = $1, "finishedAt" = now() WHERE id = $2`,
@@ -107,6 +107,18 @@ export async function finishNodeRunFailure(nodeRunId: string, error: string): Pr
     `UPDATE "ExecutionNodeRun" SET status = 'failed', error = $1, "finishedAt" = now() WHERE id = $2`,
     [error, nodeRunId]
   );
+}
+
+/**
+ * Cheap status lookup used by the execution loop's cancellation check
+ * (see runLevels in engine/executor.ts) — polled once per node "level"
+ * rather than per-node so a cancel-from-canvas request takes effect
+ * within one level's worth of in-flight work rather than instantly, at
+ * negligible DB cost.
+ */
+export async function getExecutionStatus(executionId: string): Promise<string | null> {
+  const result = await pool.query(`SELECT status FROM "Execution" WHERE id = $1`, [executionId]);
+  return result.rows[0]?.status ?? null;
 }
 
 export async function markNodeSkipped(executionId: string, nodeId: string): Promise<void> {

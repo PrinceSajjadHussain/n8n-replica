@@ -31,6 +31,13 @@ import {
   Bug,
   Siren,
   Activity,
+  Server,
+  Zap,
+  Tags,
+  Smile,
+  FileText,
+  MessageCircleQuestion,
+  List,
   type LucideIcon,
 } from 'lucide-react';
 import {
@@ -94,6 +101,13 @@ const LUCIDE_ICONS: Record<string, LucideIcon> = {
   Bug,
   Siren,
   Activity,
+  Server,
+  Zap,
+  Tags,
+  Smile,
+  FileText,
+  MessageCircleQuestion,
+  List,
 };
 
 /** Branded service marks, keyed by the `si:<name>` half of `iconKey`. CC0 via `simple-icons`. */

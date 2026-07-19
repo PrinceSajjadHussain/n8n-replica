@@ -95,6 +95,109 @@ export const chatTriggerNode: NodePlugin = {
   },
 };
 
+/**
+ * RSS/Atom feed trigger — no-op at execution time. The engine seeds `input`
+ * with `{ id, title, link, pubDate }` when the feed poller
+ * (apps/api/src/utils/triggerPollers.ts registerRssTrigger) sees a new item
+ * on the configured feed URL.
+ */
+export const rssTriggerNode: NodePlugin = {
+  type: 'rssTrigger',
+  async execute({ input }) {
+    return { output: input ?? {} };
+  },
+};
+
+/**
+ * MQTT trigger — no-op at execution time. The engine seeds `input` with
+ * `{ topic, value }` when the MQTT subscriber (triggerPollers.ts
+ * registerMqttTrigger) receives a message on the configured topic.
+ */
+export const mqttTriggerNode: NodePlugin = {
+  type: 'mqttTrigger',
+  async execute({ input }) {
+    return { output: input ?? {} };
+  },
+};
+
+/**
+ * Public form trigger — no-op at execution time, same pattern as
+ * `webhook`/`chatTrigger`. The engine seeds `input` with the submitted
+ * field values when a request hits `POST /form/:workflowId/:path`
+ * (apps/api/src/routes/form.ts). `GET /form/:workflowId/:path` serves a
+ * plain hosted HTML form built from this node's `fields` param, so no
+ * separate frontend build is needed to collect the submission.
+ *
+ * Unlike n8n's Form node, this round doesn't support pausing mid-workflow
+ * for a second form page — the trigger starts the run and the run doesn't
+ * pause for more form input partway through. See README "Public form
+ * trigger (this round)" for what a follow-up "Form" mid-workflow node
+ * would need.
+ */
+export const formTriggerNode: NodePlugin = {
+  type: 'formTrigger',
+  async execute({ input }) {
+    return { output: input ?? {} };
+  },
+};
+
+/**
+ * Execute-Workflow trigger — the typed callee-side entry point n8n calls
+ * "When Executed by Another Workflow". Functionally a no-op like the other
+ * triggers (any root node already receives the trigger payload — see
+ * executor.ts's `processNode`), but this one additionally *declares and
+ * validates* the shape of input it expects via `params.inputSchema`, so a
+ * workflow meant to be called as a sub-workflow (via the `subWorkflow`
+ * node on the caller's side) can fail fast with a clear error instead of
+ * a confusing downstream `undefined`/type error when called wrong.
+ *
+ * params:
+ *   inputSchema?: Array<{ name: string, type?: 'string'|'number'|'boolean'|'object'|'array', required?: boolean }>
+ *
+ * Validation is intentionally shallow (top-level field presence + typeof
+ * check) — this isn't a full JSON-Schema engine, just enough to catch the
+ * common "caller forgot a field" / "caller sent a string where a number
+ * was expected" mistakes.
+ */
+interface InputSchemaField {
+  name: string;
+  type?: 'string' | 'number' | 'boolean' | 'object' | 'array';
+  required?: boolean;
+}
+
+function typeMatches(value: unknown, type: InputSchemaField['type']): boolean {
+  if (!type) return true;
+  if (type === 'array') return Array.isArray(value);
+  if (type === 'object') return typeof value === 'object' && value !== null && !Array.isArray(value);
+  return typeof value === type;
+}
+
+export const executeWorkflowTriggerNode: NodePlugin = {
+  type: 'executeWorkflowTrigger',
+  async execute({ input, params }) {
+    const schema = (params.inputSchema as InputSchemaField[]) ?? [];
+    if (schema.length > 0) {
+      const payload = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
+      const errors: string[] = [];
+      for (const field of schema) {
+        const value = payload[field.name];
+        const present = value !== undefined && value !== null;
+        if (field.required && !present) {
+          errors.push(`missing required field "${field.name}"`);
+          continue;
+        }
+        if (present && !typeMatches(value, field.type)) {
+          errors.push(`field "${field.name}" expected type "${field.type}" but got "${typeof value}"`);
+        }
+      }
+      if (errors.length > 0) {
+        throw new Error(`executeWorkflowTrigger: input validation failed — ${errors.join('; ')}`);
+      }
+    }
+    return { output: input ?? {} };
+  },
+};
+
 registerNode(webhookNode);
 registerNode(scheduleNode);
 registerNode(emailTriggerNode);
@@ -102,3 +205,7 @@ registerNode(fileWatcherNode);
 registerNode(databaseChangeNode);
 registerNode(streamTriggerNode);
 registerNode(chatTriggerNode);
+registerNode(rssTriggerNode);
+registerNode(mqttTriggerNode);
+registerNode(formTriggerNode);
+registerNode(executeWorkflowTriggerNode);

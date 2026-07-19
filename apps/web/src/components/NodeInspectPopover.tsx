@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 export interface NodeRunSnapshot {
   status: 'running' | 'success' | 'failed' | 'skipped' | 'idle';
@@ -72,6 +72,47 @@ function BinaryChip({ name, entry }: { name: string; entry: BinaryEntry }) {
   );
 }
 
+/** Small copy-to-clipboard affordance shared by every JSON pane in the
+ *  popover — flips to a brief "Copied" confirmation, then reverts. */
+function CopyButton({ value, className = '' }: { value: string; className?: string }) {
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 1200);
+    return () => clearTimeout(t);
+  }, [copied]);
+
+  return (
+    <button
+      onClick={async (e) => {
+        e.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(value);
+          setCopied(true);
+        } catch {
+          /* clipboard unavailable (permissions/insecure context) — silently no-op */
+        }
+      }}
+      className={`focus-ring text-[10px] px-1.5 py-0.5 rounded border border-panelBorder text-muted hover:text-ink hover:border-signal/40 ${className}`}
+    >
+      {copied ? 'Copied ✓' : 'Copy'}
+    </button>
+  );
+}
+
+/** Skeleton shimmer shown in place of the JSON pane while a `test-run` or
+ *  live execution is in flight, instead of a blank pane until data lands. */
+function JsonSkeleton() {
+  return (
+    <div className="flex-1 overflow-hidden m-3 mt-2 bg-canvas border border-panelBorder rounded-md p-2 flex flex-col gap-1.5">
+      {[92, 76, 84, 60, 70].map((w, i) => (
+        <div key={i} className="h-2.5 rounded bg-panelBorder/60 animate-pulse" style={{ width: `${w}%` }} />
+      ))}
+    </div>
+  );
+}
+
 function BinaryPreview({ binary }: { binary: unknown }) {
   if (!binary || typeof binary !== 'object') return null;
   const entries = Object.entries(binary as Record<string, BinaryEntry>);
@@ -97,7 +138,17 @@ export default function NodeInspectPopover({
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<'input' | 'output'>('output');
-  const body = tab === 'input' ? snapshot.input : snapshot.error ? snapshot.error : snapshot.output;
+  const [itemIndex, setItemIndex] = useState(0);
+  const rawBody = tab === 'input' ? snapshot.input : snapshot.error ? snapshot.error : snapshot.output;
+
+  // Per-item drill-down: for a batch result (array of items), let the
+  // user step through item N/total instead of dumping the whole array.
+  const isBatch = Array.isArray(rawBody) && rawBody.length > 1;
+  const clampedIndex = isBatch ? Math.min(itemIndex, (rawBody as unknown[]).length - 1) : 0;
+  const body = isBatch ? (rawBody as unknown[])[clampedIndex] : rawBody;
+
+  // Skeleton while a run is in flight and this pane's data hasn't arrived yet.
+  const isLoading = snapshot.status === 'running' && body === undefined;
 
   return (
     <div
@@ -125,7 +176,10 @@ export default function NodeInspectPopover({
         {(['input', 'output'] as const).map((t) => (
           <button
             key={t}
-            onClick={() => setTab(t)}
+            onClick={() => {
+              setTab(t);
+              setItemIndex(0);
+            }}
             className={`focus-ring text-[11px] px-2 py-1 rounded-md border ${
               tab === t ? 'border-signal/50 text-signal bg-signal/10' : 'border-panelBorder text-muted hover:text-ink'
             }`}
@@ -133,11 +187,41 @@ export default function NodeInspectPopover({
             {t === 'input' ? 'Input' : snapshot.error ? 'Error' : 'Output'}
           </button>
         ))}
+        {isBatch && (
+          <div className="ml-auto flex items-center gap-1 text-[10px] text-muted">
+            <button
+              onClick={() => setItemIndex((i) => Math.max(0, i - 1))}
+              disabled={clampedIndex === 0}
+              className="focus-ring px-1 rounded border border-panelBorder disabled:opacity-30"
+              aria-label="Previous item"
+            >
+              ‹
+            </button>
+            <span>
+              {clampedIndex + 1}/{(rawBody as unknown[]).length}
+            </span>
+            <button
+              onClick={() => setItemIndex((i) => Math.min((rawBody as unknown[]).length - 1, i + 1))}
+              disabled={clampedIndex === (rawBody as unknown[]).length - 1}
+              className="focus-ring px-1 rounded border border-panelBorder disabled:opacity-30"
+              aria-label="Next item"
+            >
+              ›
+            </button>
+          </div>
+        )}
       </div>
       <BinaryPreview binary={snapshot.binary} />
-      <pre className="flex-1 overflow-auto m-3 mt-2 text-[11px] leading-snug whitespace-pre-wrap break-words bg-canvas border border-panelBorder rounded-md p-2">
-        {formatJson(body)}
-      </pre>
+      {isLoading ? (
+        <JsonSkeleton />
+      ) : (
+        <div className="relative flex-1 min-h-0 m-3 mt-2">
+          <CopyButton value={formatJson(body)} className="absolute top-1.5 right-1.5 bg-panel" />
+          <pre className="h-full overflow-auto text-[11px] leading-snug whitespace-pre-wrap break-words bg-canvas border border-panelBorder rounded-md p-2 pr-14">
+            {formatJson(body)}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }

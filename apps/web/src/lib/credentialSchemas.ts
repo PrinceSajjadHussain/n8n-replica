@@ -20,6 +20,9 @@ export const CREDENTIAL_TYPES = [
   'openai',
   'anthropic',
   'gemini',
+  'localLlm',
+  'groq',
+  'mistral',
   'trello',
   'asana',
   'clickup',
@@ -65,6 +68,9 @@ export const CREDENTIAL_TYPE_META: Record<CredentialType, { label: string; color
   openai: { label: 'OpenAI', color: '#10A37F', letter: 'AI' },
   anthropic: { label: 'Anthropic', color: '#D97757', letter: 'A' },
   gemini: { label: 'Gemini', color: '#4285F4', letter: 'G' },
+  localLlm: { label: 'Local LLM (Ollama / vLLM)', color: '#6B7280', letter: 'L' },
+  groq: { label: 'Groq', color: '#F55036', letter: 'G' },
+  mistral: { label: 'Mistral', color: '#FA520F', letter: 'M' },
   trello: { label: 'Trello', color: '#0052CC', letter: 'T' },
   asana: { label: 'Asana', color: '#F06A6A', letter: 'A' },
   clickup: { label: 'ClickUp', color: '#7B68EE', letter: 'C' },
@@ -222,6 +228,38 @@ export const CREDENTIAL_FIELDS: Record<CredentialType, CredentialField[]> = {
       required: true,
       placeholder: 'AIza...',
       helpText: 'From aistudio.google.com/apikey. Used for both the Gemini node and as the "gemini" embeddingProvider/answerProvider option on RAG nodes.',
+    },
+  ],
+  localLlm: [
+    {
+      key: 'apiKey',
+      label: 'API key',
+      fieldType: 'password',
+      required: false,
+      placeholder: '(optional)',
+      helpText:
+        'Leave empty for a local, unauthenticated Ollama/vLLM/LM Studio server (the vast majority of setups). ' +
+        'Only set this if your server enforces a bearer token (e.g. vLLM started with --api-key).',
+    },
+  ],
+  groq: [
+    {
+      key: 'apiKey',
+      label: 'API key',
+      fieldType: 'password',
+      required: true,
+      placeholder: 'gsk_...',
+      helpText: 'From console.groq.com/keys.',
+    },
+  ],
+  mistral: [
+    {
+      key: 'apiKey',
+      label: 'API key',
+      fieldType: 'password',
+      required: true,
+      placeholder: '...',
+      helpText: 'From console.mistral.ai/api-keys.',
     },
   ],
   trello: [
@@ -409,6 +447,18 @@ export const NODE_TYPE_TO_CREDENTIAL_TYPE: Record<string, CredentialType> = {
   openai: 'openai',
   anthropic: 'anthropic',
   gemini: 'gemini',
+  localLlm: 'localLlm',
+  groq: 'groq',
+  mistral: 'mistral',
+  // textClassifier/sentimentAnalysis/entityExtractor/summarizer/qaChain all
+  // support provider: 'openai' | 'anthropic' | 'gemini' via params.provider,
+  // same as ragIngest/ragQuery/agent above — mapped to 'openai' as the
+  // default-selected credential type, not a strict filter.
+  textClassifier: 'openai',
+  sentimentAnalysis: 'openai',
+  entityExtractor: 'openai',
+  summarizer: 'openai',
+  qaChain: 'openai',
   // ragIngest/ragQuery default to an 'openai' credential (embeddingProvider:
   // 'openai' is the default), but also accept a 'gemini' credential when
   // params.embeddingProvider/answerProvider is set to 'gemini' — omitted

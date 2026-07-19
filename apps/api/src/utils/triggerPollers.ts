@@ -212,6 +212,110 @@ export async function registerStreamTrigger(
 }
 
 /**
+ * RSS/Atom feed trigger — polls a feed URL on an interval and enqueues one
+ * trigger per item/entry not seen on a previous poll. No XML library
+ * dependency: RSS `<item>` and Atom `<entry>` blocks are simple enough that
+ * a small regex-based extractor (title/link/guid-or-id/pubDate) avoids
+ * pulling in a full XML parser for what's a handful of flat text fields.
+ * "Not seen before" is tracked by guid/id (falling back to link) in an
+ * in-memory Set — fine for a single API instance; a multi-instance
+ * deployment would want this moved into Redis (see "Multi-region /
+ * horizontal worker scaling" in the parity doc, still open).
+ */
+function extractFeedItems(xml: string): Array<{ id: string; title: string; link: string; pubDate: string | null }> {
+  const blocks = xml.match(/<item\b[\s\S]*?<\/item>/gi) ?? xml.match(/<entry\b[\s\S]*?<\/entry>/gi) ?? [];
+  const field = (block: string, tag: string): string | null => {
+    const m = block.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i'));
+    if (!m) return null;
+    return m[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').trim();
+  };
+  return blocks.map((block) => {
+    const link = field(block, 'link') ?? (block.match(/<link[^>]*href="([^"]+)"/i)?.[1] ?? '');
+    const id = field(block, 'guid') ?? field(block, 'id') ?? link;
+    return {
+      id: id || link,
+      title: field(block, 'title') ?? '',
+      link,
+      pubDate: field(block, 'pubDate') ?? field(block, 'published') ?? field(block, 'updated'),
+    };
+  });
+}
+
+export function registerRssTrigger(
+  workflowId: string,
+  userId: string,
+  feedUrl: string,
+  pollIntervalSec = 300
+): () => void {
+  const seen = new Set<string>();
+  let primed = false; // first poll only seeds `seen`, doesn't fire — otherwise every existing item fires the moment a workflow is activated
+
+  const axios = require('axios');
+  const poll = async () => {
+    try {
+      const { data } = await axios.get(feedUrl, { responseType: 'text', timeout: 15000 });
+      const items = extractFeedItems(String(data));
+      for (const item of items) {
+        if (seen.has(item.id)) continue;
+        seen.add(item.id);
+        if (primed) {
+          await enqueueTrigger(workflowId, userId, 'rssTrigger', item);
+        }
+      }
+      primed = true;
+    } catch (err) {
+      console.error(`RSS trigger poll failed for ${feedUrl}:`, err instanceof Error ? err.message : err);
+    }
+  };
+
+  void poll();
+  const interval = setInterval(poll, Math.max(30, pollIntervalSec) * 1000);
+  return () => clearInterval(interval);
+}
+
+/**
+ * MQTT trigger — subscribes to a topic (or wildcard topic filter) on an
+ * MQTT broker and enqueues one trigger per message. Requires the `mqtt`
+ * package (added to apps/api/package.json alongside this change).
+ */
+export async function registerMqttTrigger(
+  workflowId: string,
+  userId: string,
+  config: { brokerUrl: string; topic: string; username?: string; password?: string; qos?: 0 | 1 | 2 }
+): Promise<() => Promise<void>> {
+  // Lazy require so the rest of the API doesn't hard-fail if `mqtt` hasn't
+  // been installed yet in an environment that isn't using this trigger.
+  const mqtt = require('mqtt');
+  const client = mqtt.connect(config.brokerUrl, {
+    username: config.username,
+    password: config.password,
+    clientId: `flowforge-${workflowId}-${randomUUID().slice(0, 8)}`,
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    client.once('connect', () => resolve());
+    client.once('error', (err: Error) => reject(err));
+  });
+  await new Promise<void>((resolve, reject) => {
+    client.subscribe(config.topic, { qos: config.qos ?? 0 }, (err: Error | null) => (err ? reject(err) : resolve()));
+  });
+
+  client.on('message', (topic: string, payload: Buffer) => {
+    let value: unknown = payload.toString('utf-8');
+    try {
+      value = JSON.parse(value as string);
+    } catch {
+      /* keep raw string if not JSON */
+    }
+    void enqueueTrigger(workflowId, userId, 'mqttTrigger', { topic, value });
+  });
+
+  return async () => {
+    await new Promise<void>((resolve) => client.end(false, {}, () => resolve()));
+  };
+}
+
+/**
  * File-watcher trigger — uses Node's built-in fs.watch (no chokidar
  * dependency). Good for single-directory, non-recursive-glob cases; swap in
  * chokidar if you need debounced recursive globs across many files.

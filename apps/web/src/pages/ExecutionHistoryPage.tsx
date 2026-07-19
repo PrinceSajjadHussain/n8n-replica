@@ -11,7 +11,7 @@ import SegmentedToggle from '../components/ui/SegmentedToggle';
 
 interface Execution {
   id: string;
-  status: 'running' | 'success' | 'failed' | 'paused';
+  status: 'running' | 'success' | 'failed' | 'paused' | 'cancelled';
   startedAt: string;
   finishedAt: string | null;
   triggerType: string;

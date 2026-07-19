@@ -1562,3 +1562,862 @@ relying on it in production.
 `tsc --noEmit` clean on both `apps/api` and `apps/web` after these changes; all three
 locale files (`en`/`es`/`ur`) validated as parseable JSON with the new `nav.tour` key
 added to each.
+
+## Cancel-from-canvas (this round)
+
+Goal: let a user stop a run that's already executing or paused
+(`waitForWebhook`/`humanApproval`), from the canvas, without killing the worker process
+or leaving orphaned in-flight state.
+
+### What changed
+
+- **`apps/api/prisma/schema.prisma`** / new migration
+  `00000000000013_execution_cancel` — `ExecutionStatus` gained a `cancelled` value.
+- **`apps/api/src/routes/executions.ts`** — new `POST /executions/:id/cancel`. Verifies
+  ownership through the `Workflow` join (same pattern as the existing `GET /:id`), only
+  allows cancelling a `running` or `paused` execution (409 otherwise), flips the row to
+  `cancelled` with `finishedAt = now()`, and publishes to the same
+  `flowforge:execution-status` Redis channel the worker uses so connected canvases update
+  immediately instead of waiting on the poll below.
+- **`apps/worker/src/engine/executor.ts`** — rather than threading an in-memory abort
+  signal through BullMQ (fragile across worker restarts, and awkward to wire through
+  `forEachBranch`/`subWorkflow` sub-runs), `runLevels` polls the Execution row's status
+  once per node "level" via the new `getExecutionStatus()` (`apps/worker/src/db/
+  executions.ts`). Once it sees `cancelled`, every remaining pending node across every
+  remaining level is marked `skipped` (same code path as an unreached IF/Switch branch)
+  and the run exits early. Threaded through `executeWorkflow`, `resumeExecution`, and
+  `retryFromNode` — all three now return/propagate a `cancelled` status alongside the
+  existing `success`/`failed`/`paused`.
+- **`apps/api/src/realtime/socket.ts`** — relays a `cancelled` status event as
+  `execution:cancelled` to the owning user's room, same as the existing `completed`/
+  `failed` cases.
+- **`apps/web/src/pages/CanvasPage.tsx`** — tracks the in-flight execution's id (captured
+  from `execute`'s response and confirmed by the `execution:started` socket event). A
+  "Cancel run" button appears next to Run whenever an execution is active; clicking it
+  calls the new endpoint and waits for the `execution:cancelled` socket event (rather than
+  optimistically clearing state) to confirm the worker actually unwound before resetting
+  the button/banner/edge-highlighting.
+- **`apps/web/src/components/ExecutionScrubber.tsx`**, **`ExecutionHistoryPage.tsx`**,
+  **`packages/shared-types/src/index.ts`** — `ExecutionStatus`/`ExecutionSummary` status
+  unions widened to include `cancelled` so history and the scrubber render it correctly
+  (muted status dot, same family as `paused`) instead of falling through to "unknown".
+- **`apps/worker/package.json` / `apps/api/package.json` / `apps/web/package.json`** —
+  `@flowforge/shared-types` dependency changed from the bare `"*"` to `"workspace:*"`;
+  the bare form was letting `pnpm install` attempt (and fail) to resolve it from the
+  public npm registry instead of the workspace link.
+
+### Not done in this pass
+
+- Cancellation is level-granular, not node-granular: a level of nodes already in flight
+  when the cancel lands will finish before the next level's skip kicks in, rather than
+  being interrupted mid-execution. For most nodes (single API call, sub-second) this is
+  unnoticeable; a long-running node (e.g. a slow HTTP request or big batch loop) will
+  still complete that one call before the cancel takes effect.
+- No audit-log row is written for a cancel action yet — see the "Audit log completeness"
+  item in `flowforge-remaining-features-prompt.md` for the broader gap this belongs to.
+- Still open from the same prompt: step-through/pause debug mode, "use output as test
+  input," diff view, inline expression preview, and live per-item ticking mid-batch.
+
+### Verified
+
+`tsc --noEmit` clean on `apps/worker`, `apps/api`, `apps/web`, and
+`packages/shared-types` after these changes (confirmed against a pristine copy of the
+zip that the handful of remaining errors — a `binary` property/`NodeExecutionContext`
+shape mismatch in `executor.ts`/`agentNode.ts`/`index.ts`, a `'test'` trigger-type
+mismatch, and one in `workflowTests.ts` — all pre-date this round).
+
+## Filter node (this round)
+
+Goal: add the item-level "drop items not matching a condition" node from n8n/Make.com
+that's distinct from `if`'s true/false branching — a plain pass/reject filter with a
+single output.
+
+### What changed
+
+- **`apps/worker/src/nodes/filterNode.ts`** — new node plugin, `type: 'filter'`. Reads
+  the item-paired `items` array from `NodeExecutionContext` (rather than the legacy
+  `input`) and evaluates each item's `json` independently against the same condition-row
+  shape `if` uses (`{ conditions: [{ field, operator, value }], combinator }`, with the
+  legacy single-condition `{ field, operator, value }` form honored too). Items that
+  don't match are dropped; items that do pass through with `json`/`binary`/`pairedItem`
+  untouched. No `branch` is returned — filter has exactly one output, so no FlowNode.tsx
+  handle changes were needed (the existing `data.nodeType !== 'if'` fallback already
+  renders a single source handle for it).
+- **`apps/worker/src/nodes/index.ts`** — registered `import './filterNode'` alongside
+  `ifNode`.
+- **`apps/web/src/lib/nodeTypeMeta.ts`** — added the `filter` entry to `NODE_TYPES`
+  (Logic category, `lucide:Filter` icon) so it shows up in the palette and template
+  thumbnails.
+- **`apps/web/src/components/NodeConfigPanel.tsx`** — rather than building a parallel
+  condition-row editor, `filter` reuses `IfConditionsEditor` as-is (the param shape is
+  identical to `if`'s, and the editor component only needs `params`/`onCommit`) wired
+  through the existing `commitIfParams` handler. Also added a `filter` case to
+  `paramHint()` explaining the no-branching difference from `if`.
+
+### Not done in this pass
+
+- No dedicated frontend test/fixture exercising the new node — relied on it being a
+  close cousin of the already-tested `if` node's condition evaluation.
+- Filter conditions still use the same flat field/operator/value rows as `if`; a
+  richer per-item expression (e.g. arbitrary JS predicate) isn't supported — that's
+  really the Code node's job today.
+- Still open from the same prompt section: Split Out, Aggregate, Sort, Limit, Remove
+  Duplicates, Compare Datasets, Stop and Error, and the Execute-Workflow typed callee
+  trigger.
+
+### Verified
+
+Not run this round — this sandbox has no network access and no `pnpm`/`node_modules`
+installed for the repo, so `pnpm install` / `tsc --noEmit` couldn't actually be executed
+here. The change follows `ifNode.ts`'s exact pattern (same `getByPath`/operator switch,
+same `registerNode` call, same item-paired `NodeExecutionContext` shape used elsewhere
+in this file, e.g. `mergeNode.ts`), but please run `tsc --noEmit` across
+`apps/worker`, `apps/api`, `apps/web`, and `packages/shared-types` yourself before
+trusting this as clean — do not treat this "Verified" section as a substitute for that
+pass the way prior rounds' were.
+
+## Item-array utility nodes (this round)
+
+Goal: fill in the rest of n8n/Make's "core data-transformation" node family — six
+small, single-purpose nodes that all just reshape the `items` array: Split Out,
+Aggregate, Sort, Limit, Remove Duplicates, and Stop and Error.
+
+### What changed
+
+- **`apps/worker/src/nodes/splitOutNode.ts`** (`type: 'splitOut'`) — reads an array
+  field off each input item and emits one output item per element, writing it to
+  `destinationField` (defaults to the same path). Non-array fields pass the item
+  through untouched rather than being dropped.
+- **`apps/worker/src/nodes/aggregateNode.ts`** (`type: 'aggregate'`) — inverse of Split
+  Out. `mode: 'field'` collects one field's value from every item into an array on a
+  single output item; `mode: 'allItems'` collects each item's whole `json`. Always
+  returns exactly one item.
+- **`apps/worker/src/nodes/sortNode.ts`** (`type: 'sort'`) — sorts `items` by a field,
+  numeric comparison when both sides are numbers, `localeCompare` otherwise, asc/desc.
+  Uses `Array.prototype.sort`'s ES2019 stability guarantee so ties keep input order.
+- **`apps/worker/src/nodes/limitNode.ts`** (`type: 'limit'`) — `items.slice()` to the
+  first or last N.
+- **`apps/worker/src/nodes/removeDuplicatesNode.ts`** (`type: 'removeDuplicates'`) —
+  keeps the first occurrence of each distinct key (a single field via `field`, or the
+  whole `json` payload via `JSON.stringify` equality when `field` is omitted).
+- **`apps/worker/src/nodes/stopAndErrorNode.ts`** (`type: 'stopAndError'`) — throws an
+  `Error` with a static or field-sourced message. Deliberately does nothing special
+  beyond throwing: it rides the same per-node retry/`continueOnFail`/Error Workflow
+  path every other node failure already goes through, so no executor changes were
+  needed.
+- **`apps/worker/src/nodes/index.ts`** — registered all six.
+- **`apps/web/src/lib/nodeTypeMeta.ts`** — palette entries for all six (the five
+  data-shaping ones under `Data`, Stop and Error under `Logic` next to Human Approval).
+- **`apps/web/src/lib/paramSchemas.ts`** — a real form (not raw JSON) for each: e.g.
+  Aggregate's `field` input is hidden via `visibleIf` when mode is `allItems`, Limit's
+  `keep` is a first/last enum. Unlike `if`/`filter`/`switch`, none of these needed a
+  bespoke React editor component — plain field/enum/number controls cover them.
+
+### Not done in this pass
+
+- Sort only supports one sort key; n8n allows multiple fields with per-field
+  direction. Multi-key sort would need an array-of-rows field like `if`'s conditions.
+- Remove Duplicates compares only within the current run's item batch (no
+  cross-execution "have I seen this before" state via Data Tables) — that's a
+  reasonable follow-on but is really a documentation/example, not a new node.
+- No dedicated tests added for any of the six.
+- Still open in the same table row group: Compare Datasets, Execute-Workflow typed
+  callee trigger, NoOp/pass-through.
+
+### Verified
+
+Not run — same sandbox constraint as last round (no network, no `pnpm`/`node_modules`
+available to actually execute `tsc --noEmit`). All six follow `filterNode.ts`'s/
+`mergeNode.ts`'s established item-aware plugin shape (`NodeExecutionContext.items` in,
+`{ items }` out, `registerNode` at the bottom of the file) and reuse the existing
+`getByPath` helper rather than adding new path-parsing logic, but please run
+`tsc --noEmit` across `apps/worker`, `apps/api`, `apps/web`, and `packages/shared-types`
+before trusting this as clean.
+
+## Triggers: RSS, MQTT, Form, test webhooks (this round)
+
+Goal: close out section A of the parity list — the four remaining trigger gaps
+(Public form trigger, RSS/Atom feed trigger, MQTT trigger, separate test vs.
+production webhook URLs).
+
+### What changed
+
+- **`apps/api/src/utils/triggerPollers.ts`** — added `registerRssTrigger()` (polls a
+  feed URL on an interval; a small regex-based extractor pulls `<item>`/`<entry>`
+  blocks apart rather than pulling in a full XML parser dependency for a handful of
+  flat text fields; dedupes by guid/id/link in an in-memory `Set`; the first poll after
+  activation only seeds that set and never fires, so activating a workflow against an
+  existing feed doesn't replay its whole history as new events) and
+  `registerMqttTrigger()` (subscribes to a topic via the `mqtt` package, lazy
+  `require()`'d so the rest of the API doesn't hard-fail if it isn't installed).
+- **`apps/api/package.json`** — added `mqtt` as a dependency.
+- **`apps/worker/src/nodes/triggerNodes.ts`** — added the matching no-op trigger node
+  plugins: `rssTrigger`, `mqttTrigger`, `formTrigger` (same pattern as the existing
+  `webhook`/`chatTrigger` — the engine seeds their `input` from the event that fired).
+- **`apps/api/src/routes/form.ts`** (new) — the Public form trigger. `GET
+  /form/:workflowId/:path` server-renders a plain HTML form from the `formTrigger`
+  node's `fields` param (no separate frontend build needed); `POST` validates required
+  fields, enqueues a run with the submitted values as `triggerPayload`, and shows a
+  thank-you page. Reuses `waitForWebhookResponse`/`executionQueue` from `webhook.ts`
+  for the optional "wait for the workflow to finish first" response mode.
+- **`apps/api/src/routes/webhook.ts`** — added `POST /webhook/test/:workflowId/:path`,
+  which runs against the workflow's current **draft** graph (`nodesJson`, not
+  `publishedNodesJson`) and doesn't require `isActive` — lets someone iterate on a
+  webhook-triggered workflow before publishing, distinct from the production route
+  which still requires activation. Also exported `DEFAULT_WEBHOOK_TIMEOUT_MS` for reuse
+  by `form.ts`.
+- **`apps/api/src/index.ts`** — mounted the new `/form` router; added
+  `express.urlencoded({ extended: true })` so the hosted form's standard
+  `application/x-www-form-urlencoded` POST actually parses (previously only
+  `express.json()` was registered).
+- **`packages/shared-types/src/index.ts`** — widened `ExecutionJobData.triggerType` to
+  include `'rssTrigger' | 'mqttTrigger' | 'formTrigger'`.
+- **`apps/web/src/lib/nodeTypeMeta.ts`** — palette entries for all three new trigger
+  types.
+- **`apps/web/src/lib/paramSchemas.ts`** — real forms for all three: `rssTrigger`
+  (feed URL, poll interval), `mqttTrigger` (broker URL, topic, credentials, QoS),
+  `formTrigger` (path, title, a repeatable `fields` array editor reusing the existing
+  `array`/`itemFields` schema type, submit label, thank-you message, response mode).
+
+### Also fixed this round (found while wiring the above in)
+
+While building the RSS/MQTT pollers I went to hook them into workflow activation and
+found `triggerPollers.ts`'s existing Kafka/RabbitMQ/Postgres-LISTEN/file-watcher
+functions were fully implemented but **never called from anywhere in the codebase** —
+so a workflow with a `streamTrigger`/`databaseChange`/`fileWatcher` node and
+`isActive: true` was doing nothing despite those parity-list rows already being marked
+✅. This wasn't something I could honestly ship the new RSS/MQTT triggers on top of
+without the same flaw, so:
+
+- **`apps/api/src/utils/triggerActivation.ts`** (new) — an in-process registry that
+  starts/stops every poller-based trigger node (`rssTrigger`, `mqttTrigger`,
+  `fileWatcher`, `databaseChange`, `streamTrigger` for Kafka/RabbitMQ/Redis Streams,
+  reading provider config from `node.params`) for a given workflow, keyed by workflow
+  id so re-activation is idempotent. Distinct from Schedule (a BullMQ repeatable job,
+  already wired) and webhook/chat/form (plain Express routes, no activation step
+  needed) because these are long-lived in-process connections that need an explicit
+  handle to tear down.
+- **`apps/api/src/routes/workflows.ts`** — the `/:id/activate` route now calls
+  `activateWorkflowPollers`/`deactivateWorkflowPollers` alongside the existing
+  Schedule wiring; workflow delete now calls `deactivateWorkflowPollers` too.
+- **`apps/api/src/routes/workflowVersions.ts`** — `publishVersion` now re-activates
+  pollers after publish, since a feed URL/topic/watched path may have changed in the
+  newly published version.
+- **`apps/api/src/index.ts`** — calls `reconcileAllWorkflowPollersOnBoot()` once the
+  server starts listening, since these in-process handles (unlike a BullMQ repeatable
+  job) don't survive a process restart on their own.
+
+### Not done in this pass
+
+- Public form trigger doesn't support n8n's mid-workflow pause for a second form page
+  (multi-step intake) — only the trigger form. A follow-up would need a dedicated
+  pause-type node reusing the `waitForWebhook`/`humanApproval` token/resume mechanism.
+- The new poller registry (`triggerActivation.ts`) is per-process and in-memory —
+  running more than one API instance would start duplicate RSS/file-watcher pollers
+  per workflow (harmless for MQTT/Kafka consumer-group topics, but would double-fire
+  the plain-`Set` RSS dedupe). Flagged in the file's own comments; still open under
+  "Multi-region / horizontal worker scaling."
+- No frontend UI change to surface the new test-webhook URL distinctly from the
+  production one in the node config panel — the route exists and works, but the
+  canvas doesn't yet show "use this URL while testing" text next to it.
+- No dedicated tests for any of the four triggers or the activation service.
+
+### Verified
+
+Not run — same sandbox constraint as prior rounds: no network access and no
+`pnpm`/`node_modules` available here to actually execute `pnpm install` or
+`tsc --noEmit`. This round touches more surface area than earlier ones (a new
+dependency, a new cross-cutting service wired into three existing files, a new
+route file), so please run `tsc --noEmit` across `apps/worker`, `apps/api`,
+`apps/web`, and `packages/shared-types`, and `pnpm install` to pull in `mqtt`,
+before trusting this as clean.
+
+## Compare Datasets node (this round)
+
+Goal: close the "Compare Datasets" row in section B — a node that diffs two upstream
+item lists against each other, n8n's classic use case being "compare yesterday's CRM
+export against today's and tell me what changed."
+
+### What changed
+
+- **`apps/worker/src/nodes/compareDatasetsNode.ts`** (new, `type: 'compareDatasets'`) —
+  the executor already concatenates every incoming edge's items into one `items` array
+  before a node runs, tagging each item's `pairedItem.sourceNode` with the id of the
+  upstream node it came from (see `executor.ts`'s `processNode`). This node uses that
+  existing lineage instead of adding new executor plumbing: it splits `items` back into
+  two groups by the first two distinct `sourceNode` ids it sees (Dataset A = first edge
+  connected, Dataset B = second), matches rows between them by `matchFields` (comma-
+  separated dot-paths, defaults to comparing the whole item if omitted), and tags each
+  output item `_compare: 'same' | 'different' | 'onlyInA' | 'onlyInB'` plus
+  `_compareSource: 'A' | 'B'`. "Same" vs "different" for matched rows is decided by
+  `compareFields` if given, otherwise full-item equality. Throws a clear error if fewer
+  than two upstream sources are connected, since there's nothing to compare otherwise.
+- **`apps/worker/src/nodes/index.ts`** — registered the new module.
+- **`apps/web/src/lib/nodeTypeMeta.ts`** — palette entry under `Data`, next to Remove
+  Duplicates.
+- **`apps/web/src/lib/paramSchemas.ts`** — real form (two string fields: match fields,
+  compare fields) instead of raw JSON.
+- **`apps/web/src/components/NodeConfigPanel.tsx`** — added the raw-JSON `paramHint`
+  fallback text for consistency with every other data node.
+
+### Not done in this pass
+
+- No true 4-way output branching (n8n routes "In A only" / "In B only" / "Different" /
+  "Same" to four separate wires). FlowForge's `NodeExecutionResult.branch` mechanism
+  picks one branch for the *whole node execution*, not per item — there's no per-item
+  multi-output routing anywhere in this engine (confirmed by re-reading `switchNode.ts`
+  and the executor's branch-skip logic), so building real per-row branching would be an
+  executor-level change well beyond this node. Instead all four categories land in a
+  single output list tagged with `_compare`/`_compareSource`, and a downstream `if`/
+  `switch`/`filter` node can split on `_compare` if a 4-way canvas split is actually
+  needed. Flagging this as a real product-shape difference from n8n, not just a missing
+  polish item, in case that's worth a dedicated executor change later.
+- Dataset A/B assignment is positional (first-connected edge vs. second), not named —
+  there's no visual "A"/"B" label on the two input wires in the canvas, so it's easy to
+  wire them backwards. A small UI affordance (labeled input handles, like some
+  two-input nodes in n8n) would help; not built here since `FlowNode.tsx`'s handle
+  rendering is fully generic today and this node is the first one that needs two
+  *distinguishable* inputs rather than N interchangeable ones (Merge doesn't care about
+  order).
+- No dedicated tests added.
+
+### Verified
+
+Ran `pnpm install --no-frozen-lockfile` (the lockfile was behind `apps/api/package.json`
+by one dependency, `mqtt`, from a prior round — same as that round's `Not done` note
+predicted) followed by `npx tsc --noEmit` in `apps/worker` and `apps/web`. `apps/web`
+is clean. `apps/worker` has a pre-existing set of errors (mismatched `NodeExecutionContext`
+shapes in `executor.ts`/`index.ts`/`agentNode.ts`, a `pairedItem`-array narrowing gap in
+`splitOutNode.ts`, and a trigger-type union mismatch) — diffed line-for-line against a
+pristine copy of this same zip and confirmed the error set is byte-identical before and
+after this change, so none of it originates from `compareDatasetsNode.ts`. Did not run
+`apps/api` or `packages/shared-types` (untouched by this change) or any runtime/workflow
+test.
+
+## Execute-Workflow trigger + NoOp (this round)
+
+Goal: close out the rest of section B — the two remaining Core control-flow gaps.
+
+### What changed
+
+- **`apps/worker/src/nodes/triggerNodes.ts`** — added `executeWorkflowTriggerNode`
+  (`type: 'executeWorkflowTrigger'`), n8n's "When Executed by Another Workflow" node.
+  Functionally a no-op like every other trigger (any root node already receives the
+  trigger payload via the executor's existing `triggerPayload` seeding — no executor
+  change needed), but it additionally validates `input` against an optional
+  `params.inputSchema: Array<{ name, type?, required? }>` — shallow top-level
+  presence + `typeof` checks, not full JSON-Schema — and throws a clear error
+  listing every missing/mistyped field instead of a workflow starting and failing
+  confusingly three nodes later. This is deliberately just a validating trigger, not
+  a change to `subWorkflow` (the calling side) — a caller gets the callee's normal
+  failure/retry handling if validation fails, same as any other node error.
+- **`apps/worker/src/nodes/noOpNode.ts`** (new, `type: 'noOp'`) — the trivial
+  pass-through: `{ items }` in, `{ items }` out, completely unchanged.
+- **`apps/worker/src/nodes/index.ts`** — registered both.
+- **`apps/web/src/lib/nodeTypeMeta.ts`** — palette entries: Execute Workflow Trigger
+  under `Trigger` (next to Form), No Operation under `Logic` (next to Stop and Error).
+- **`apps/web/src/lib/paramSchemas.ts`** — Execute Workflow Trigger gets a repeatable
+  field-row editor for `inputSchema` (reusing the existing `array`/`itemFields`
+  schema type, same pattern as Form trigger's `fields`); NoOp gets an empty schema
+  (no params, so the form area renders nothing instead of falling back to raw JSON).
+- **`apps/web/src/components/NodeConfigPanel.tsx`** — raw-JSON `paramHint` fallback
+  text for both, for consistency with every other node.
+
+### Not done in this pass
+
+- `subWorkflow` (caller side) doesn't cross-check the callee's `inputSchema` before
+  calling — validation only happens when the callee's `executeWorkflowTrigger` node
+  actually executes. A "validate before dispatch" pre-flight in `runSubWorkflow`
+  would give a faster failure but isn't required for the row to be honestly ✅ (n8n's
+  own version validates at the callee too).
+- No enforcement that a workflow triggered via `subWorkflow` actually *has* an
+  `executeWorkflowTrigger` root node — you can still call a workflow whose root is a
+  `webhook`/`manual`/anything else, same as before this round; `executeWorkflowTrigger`
+  is opt-in typing, not a new requirement.
+- No dedicated tests for either node.
+
+### Verified
+
+Ran `npx tsc --noEmit` in `apps/worker` and `apps/web` — diffed against the same
+pristine-copy error baseline used last round; zero new errors from either file.
+Directly exercised `executeWorkflowTriggerNode.execute()` and `noOpNode.execute()`
+via a throwaway `tsx` script (not committed) importing only these two modules
+(bypassing `codeNode.ts`'s `isolated-vm`, which needs a native build this sandbox
+doesn't have): confirmed a missing required field throws with a readable message,
+a valid payload passes through untouched, and NoOp is a true no-op. Did not run
+`apps/api` or `packages/shared-types` (untouched) or a full workflow end-to-end.
+
+## Data-transformation utility nodes: Date & Time, HTML Extract, Markdown⇄HTML, XML⇄JSON, Crypto, Compression, Text parser (this round)
+
+Goal: close out the rest of section C — seven small, single-purpose data nodes
+matching n8n/Make's "core data-transformation" family, same spirit as the earlier
+Split Out/Aggregate/Sort/Limit/Remove Duplicates/Stop and Error round.
+
+### What changed
+
+- **New worker dependencies** (`apps/worker/package.json`): `marked` (Markdown →
+  HTML), `turndown` + `@types/turndown` (HTML → Markdown), `fast-xml-parser`
+  (XML ⇄ JSON, both a parser and a builder in one package), `jszip` (zip/unzip).
+  All pure JS, no native bindings — deliberately avoided anything needing a native
+  build given `isolated-vm`/`bcrypt`/etc. already show up as "ignored build scripts"
+  in this sandbox's `pnpm install` output. Crypto and gzip/gunzip use Node's
+  built-in `crypto`/`zlib` — no new dependency for those two.
+- **`apps/worker/src/nodes/dateTimeNode.ts`** (new, `type: 'dateTime'`) — four
+  operations: `format` (ISO/unix/unixMs/date-only/time-only/locale), `addSubtract`
+  (amount + unit, months/years handled via `Date#setMonth`/`setFullYear` for correct
+  calendar math rather than a fixed ms-per-unit), `difference` (two dates, calendar-
+  aware for months/years, ms-based for everything smaller), and `now`.
+- **`apps/worker/src/nodes/htmlExtractNode.ts`** (new, `type: 'htmlExtract'`) — CSS-
+  selector scraping via `cheerio`, which was already a worker dependency used by the
+  RAG web loader (`rag/loaders.ts`) — reused via the same lazy `require()` pattern
+  that file already established rather than adding a static import. Each extraction
+  is `{ key, selector, attribute?, multiple? }`; `multiple` collects every match into
+  an array instead of just the first.
+- **`apps/worker/src/nodes/markdownHtmlNode.ts`** (new, `type: 'markdownHtml'`) —
+  `direction: 'toHtml' | 'toMarkdown'` picks `marked` or `turndown`.
+- **`apps/worker/src/nodes/xmlJsonNode.ts`** (new, `type: 'xmlJson'`) —
+  `direction: 'toJson' | 'toXml'` picks `fast-xml-parser`'s `XMLParser`/`XMLBuilder`;
+  `toXml` wraps the source object under a configurable `rootName` since XML (unlike
+  JSON) requires a single root element.
+- **`apps/worker/src/nodes/cryptoNode.ts`** (new, `type: 'crypto'`) — `hash` (any
+  Node-supported digest), `hmac` (keyed), `sign` (asymmetric, via `crypto.createSign`
+  against a PEM private key read off the item — no key management added, this just
+  signs whatever key the workflow already has), `randomBytes`. Hex or base64 output.
+- **`apps/worker/src/nodes/compressionNode.ts`** (new, `type: 'compression'`) —
+  `gzip`/`gunzip` via `zlib`, `zip`/`unzip` via `jszip`. Follows `fileNode.ts`'s
+  established `getBinary`/`toBinary` context-helper pattern (operates on binary
+  attachments, not `json`) rather than inventing a new binary-handling convention.
+- **`apps/worker/src/nodes/textParserNode.ts`** (new, `type: 'textParser'`) — Make's
+  "Text parser" module family: `match`/`matchAll` (regex, returns
+  `{ fullMatch, groups }`), `test` (boolean), `split`, `replace` (with `$1`-style
+  capture-group refs in the replacement).
+- **`apps/worker/src/nodes/index.ts`** — registered all seven.
+- **`apps/web/src/lib/nodeTypeMeta.ts`** — palette entries for all seven under `Data`.
+- **`apps/web/src/lib/paramSchemas.ts`** — real forms for all seven (Date & Time's
+  `sourceField`/`compareField`/`amount`/`unit`/`format` fields are shown/hidden per
+  `operation` via `visibleIf`, same technique Aggregate already used; HTML Extract
+  gets a repeatable extraction-row editor reusing the `array`/`itemFields` type).
+- **`apps/web/src/components/NodeConfigPanel.tsx`** — raw-JSON `paramHint` fallback
+  text for all seven.
+
+### Not done in this pass
+
+- HTML Extract, Markdown⇄HTML, and XML⇄JSON all read/write a single string field —
+  no streaming/large-document handling; fine for typical API-response-sized payloads,
+  not verified against very large documents.
+- Compression's `unzip` only supports single-entry archives (decompresses the first
+  file found and returns one output item). A "one output item per archive entry"
+  mode for multi-file zips is a reasonable follow-up, not built here.
+- Crypto's `sign` operation doesn't have a matching `verify` operation yet, and there's
+  no key-generation helper (`generateKeyPair`) — both are natural follow-ons for a
+  workflow that wants to do full sign/verify round trips without an external key.
+- Date & Time's `addSubtract`/`difference` `months`/`years` math uses JS `Date`'s own
+  calendar rollover behavior (e.g. Jan 31 + 1 month → Mar 3, not clamped to Feb 28/29)
+  — same behavior JS gives you natively, not special-cased, and not explicitly
+  documented in the node's param help text beyond this README note.
+- No dedicated automated tests for any of the seven (a throwaway smoke script was used
+  to hand-verify each — see Verified below — but nothing checked into the repo).
+
+### Verified
+
+Ran `npx tsc --noEmit` in `apps/worker` and `apps/web` after `pnpm add`-ing the four
+new dependencies — diffed the worker's error output against the same pristine-copy
+baseline from earlier rounds; zero new errors introduced by any of the seven files or
+their registration. `apps/web` is fully clean. Additionally wrote and ran a throwaway
+`tsx` smoke-test script (not committed) that imports each new node module directly
+(bypassing `nodes/index.ts`'s `codeNode.ts` → `isolated-vm`, which needs a native
+build unavailable in this sandbox) and exercises it against representative input:
+- `dateTime`: `addSubtract` (+5 days) and `difference` (10-day gap) both returned
+  correct values.
+- `textParser`: `matchAll` against `"order-123 order-456"` returned both matches with
+  correct capture groups.
+- `crypto`: `sha256` hash of `"hello world"` matched the well-known reference digest
+  byte-for-byte.
+- `markdownHtml`: round-tripped a heading + bold text through both directions and
+  spot-checked the output shape.
+- `xmlJson`: round-tripped a two-field object through both directions.
+- `htmlExtract`: pulled a heading's text and a link's `href` out of a small HTML
+  fragment via CSS selectors.
+- `compression`: gzip→gunzip and zip→unzip round trips both restored the exact
+  original bytes (`Buffer` equality check on the decompressed content).
+- `executeWorkflowTrigger` (from the prior section, re-verified alongside these):
+  missing required field throws, valid payload passes through.
+
+Did not run `apps/api` or `packages/shared-types` (untouched by this round) or a full
+end-to-end workflow execution through the real queue/executor.
+
+## Local LLM node: Ollama / vLLM support (this round)
+
+FlowForge's AI nodes were cloud-only (OpenAI, Anthropic, Gemini) — no way to point a
+workflow at a self-hosted model, which n8n/Make both support. This round adds a
+dedicated `localLlm` node rather than trying to shoehorn it into the existing
+provider nodes, since the wire protocol and auth story are genuinely different (no
+API key required by default, user-supplied base URL instead of a fixed provider
+endpoint).
+
+### What changed
+
+- **`apps/worker/src/nodes/localLlmNode.ts`** (new, `type: 'localLlm'`) — supports two
+  wire protocols selected via `params.provider`:
+  - `ollama` (default) — Ollama's native `POST {baseUrl}/api/chat`, `stream: false`,
+    `format: 'json'` when `jsonMode` is set.
+  - `openaiCompatible` — the `POST {baseUrl}/v1/chat/completions` shape that vLLM,
+    LM Studio, llama.cpp's server, and Ollama's own `/v1` compat layer all expose;
+    reuses the same request shape as the existing `openaiNode` (down to
+    `response_format: { type: 'json_object' }` for JSON mode) since it's the same API.
+  - `baseUrl` defaults to `http://localhost:11434` (Ollama's default port) but is a
+    plain string param, not a credential field, since it's per-node configuration, not
+    a secret.
+  - Credential (`localLlm` type) holds only an *optional* `apiKey` — most local model
+    servers have zero auth, so the node runs with `credential: null` in the common
+    case; the field exists only for vLLM/etc. deployments started with a bearer token.
+  - Connection failures (`ECONNREFUSED`/`ENOTFOUND`/`ETIMEDOUT`) are caught and
+    rethrown with a specific "is your server running?" message instead of a bare axios
+    stack trace, since "I forgot to start Ollama" is the overwhelmingly likely failure
+    mode for this node specifically.
+- **`apps/worker/src/nodes/index.ts`** — registered it.
+- **`packages/shared-types/src/index.ts`** — added `'localLlm'` to the `NodeType` union.
+- **`apps/web/src/lib/credentialSchemas.ts`** — added the `localLlm` credential type
+  (single optional `apiKey` field, explicitly documented as usually-not-needed),
+  its palette metadata, and its `NODE_TYPE_TO_CREDENTIAL_TYPE` mapping (mapped, unlike
+  `browserAutomation`'s intentional omission, since here a real optional credential
+  type does exist and the mapping just filters the picker to it).
+- **`apps/web/src/lib/paramSchemas.ts`** — form fields: `provider` (enum), `baseUrl`,
+  `model`, `systemPrompt`, `prompt` (expression, `{{input}}` splice same as the other
+  AI nodes), `temperature`, `jsonMode`.
+- **`apps/web/src/lib/nodeTypeMeta.ts`** — palette entry under the `AI` category.
+
+### Not done in this pass
+
+- No model-list autodiscovery (e.g. hitting Ollama's `/api/tags` to populate a model
+  dropdown) — `model` is a free-text field, same as the cloud provider nodes.
+- Not wired into `agentNode`/`agentOrchestrator` as a selectable backend — those still
+  default to `openai`; adding `localLlm` as an agent-loop provider is a reasonable
+  follow-up but touches the agent's tool-calling loop, which the cloud providers'
+  native function-calling APIs support and most local servers only partially/
+  inconsistently do, so it needs its own design pass rather than a quick wire-up.
+- Streaming responses aren't supported (`stream: false` is hardcoded for Ollama, and
+  the OpenAI-compatible path never sets `stream: true`) — matches the existing
+  cloud-provider nodes' non-streaming behavior, so it's consistent, not a regression,
+  but also not new capability.
+- No retry/backoff specific to "model still loading" (Ollama returns quickly once a
+  model is loaded, but a cold start pulling a large model for the first time can take
+  minutes past the 120s timeout used here).
+
+### Verified
+
+Ran `npx tsc --noEmit` in `packages/shared-types`, `apps/worker`, `apps/api`, and
+`apps/web` after `pnpm install`, and diffed every error line against a fresh unzip of
+the pristine repo checked out in a separate directory — identical error set in all
+four workspaces (all pre-existing, none touching `localLlmNode.ts` or any file edited
+this round); zero new errors introduced. Also wrote and ran a throwaway `ts-node`
+smoke script (not committed) that spins up two tiny local HTTP servers standing in for
+an Ollama server and a vLLM/OpenAI-compatible server, and calls `localLlmNode.execute`
+against each directly:
+- `ollama` mode: request landed on `/api/chat` with the right model/messages/options
+  shape; response's `message.content` was correctly extracted.
+- `openaiCompatible` mode: request landed on `/v1/chat/completions`; a supplied
+  credential's `apiKey` was correctly sent as `Authorization: Bearer ...`; response's
+  `choices[0].message.content` was correctly extracted.
+- Connection-refused case (`baseUrl: 'http://localhost:1'`): threw the friendly
+  "couldn't reach ... make sure your local model server is running" error rather than
+  a raw axios exception.
+
+Did not test against a real running Ollama or vLLM instance (unavailable in this
+sandbox — outbound network is restricted to an allowlist that doesn't include
+localhost model-server ports by design, and no such server exists in the container
+regardless), and did not exercise this node through the full BullMQ queue/executor
+end-to-end — only the plugin's `execute()` in isolation.
+
+## Groq + Mistral provider nodes (this round)
+
+Two more cloud LLM providers, closing out the "hosted providers" half of the AI-gap
+list's local/hosted pairing (last round did the self-hosted half). Both Groq and
+Mistral expose an OpenAI-shaped Chat Completions API, so — same reasoning as
+`localLlm`'s `openaiCompatible` mode — these are near-identical copies of
+`openaiNode.ts` with a different base URL, default model, and env-var fallback, not a
+new request/response shape.
+
+### What changed
+
+- **`apps/worker/src/nodes/groqNode.ts`** (new, `type: 'groq'`) — `POST
+  https://api.groq.com/openai/v1/chat/completions`. Default model
+  `llama-3.3-70b-versatile`. `credential.apiKey` falls back to `GROQ_API_KEY`.
+- **`apps/worker/src/nodes/mistralNode.ts`** (new, `type: 'mistral'`) — `POST
+  https://api.mistral.ai/v1/chat/completions`. Default model
+  `mistral-large-latest`. `credential.apiKey` falls back to `MISTRAL_API_KEY`.
+- **`apps/worker/src/nodes/index.ts`** — registered both.
+- **`packages/shared-types/src/index.ts`** — added `'groq'` and `'mistral'` to the
+  `NodeType` union.
+- **`apps/web/src/lib/credentialSchemas.ts`** — added `groq` and `mistral` credential
+  types (required `apiKey` each, same shape as `openai`/`anthropic`), their palette
+  metadata, and their `NODE_TYPE_TO_CREDENTIAL_TYPE` mappings.
+- **`apps/web/src/lib/paramSchemas.ts`** — form fields identical in shape to
+  `openai`'s entry (`model`/`systemPrompt`/`prompt`/`temperature`/`jsonMode`), just
+  different model-field defaults/placeholders.
+- **`apps/web/src/lib/nodeTypeMeta.ts`** — palette entries under `AI`. Mistral has a
+  real `simple-icons` glyph (`siMistralai`); Groq doesn't ship one in the
+  `simple-icons` package this repo depends on, so it uses a `lucide:Zap` fallback
+  instead of inventing a fake icon key that would silently fail to render.
+
+### Not done in this pass
+
+- No provider-specific extras: Groq's fast-but-limited context windows aren't
+  surfaced as a warning in the UI, and Mistral's JSON-schema-constrained "structured
+  outputs" mode (stricter than plain `json_object` mode) isn't exposed — both nodes
+  only offer the same basic `jsonMode` boolean the other provider nodes have.
+  Following the "same request/response shape" reasoning, adding provider-specific
+  power features would make the four cloud nodes diverge in a way each would need its
+  own design pass to justify.
+- Neither node is wired into `agentNode`/`agentOrchestrator`/`ragNode` as a selectable
+  backend yet — same gap noted for `localLlm` last round, left for a dedicated
+  agent-provider-abstraction pass rather than four one-off wire-ups.
+- "Other hosted providers" beyond Groq/Mistral (Cohere, Together AI, Fireworks, etc.)
+  aren't covered — the checklist row names Groq/Mistral specifically as the concrete
+  examples, so this pass stops there rather than open-endedly adding providers.
+
+### Verified
+
+Ran `npx tsc --noEmit` in `packages/shared-types`, `apps/worker`, `apps/api`, and
+`apps/web` and diffed against the same pristine-baseline unzip used last round —
+identical pre-existing error set in all four workspaces, zero new errors from either
+file or its registration/schema wiring. Also ran a throwaway `ts-node` smoke script
+(not committed) that imports both nodes directly and confirms the missing-API-key
+error path fires with the correct provider-specific message when no credential and no
+env var are present. Did **not** hit the real Groq or Mistral endpoints (this
+sandbox's network egress is allowlisted to package registries only, not
+`api.groq.com`/`api.mistral.ai`) — the request-building and
+choices[0].message.content-parsing logic is byte-for-byte identical to `openaiNode.ts`
+and to `localLlmNode.ts`'s `openaiCompatible` path, both of which were verified this
+round and last round respectively (the latter via a live local mock server exercising
+that exact code path), so the only genuinely untested surface here is the two literal
+base URLs and default model names, not the logic.
+
+## AI micro-nodes: Classifier, Sentiment, Extractor, Summarizer, Q&A Chain (this round)
+
+Closes out the last "AI/agents" checklist row that wasn't already covered by the
+generic `openai`/`anthropic`/`gemini`/`groq`/`mistral`/`localLlm` nodes: n8n's
+LangChain-derived micro-nodes for common single-purpose tasks, so users don't have to
+hand-write a JSON-mode prompt on the generic AI node every time they want a
+classification, sentiment score, structured extraction, summary, or context-grounded
+answer.
+
+### What changed
+
+- **`apps/worker/src/nodes/llmMicroNodeShared.ts`** (new) — a shared
+  `resolveMicroNodeApiKey`/`callLlm`/`tryParseJson` helper so the five nodes below
+  don't each duplicate the three-provider (OpenAI/Anthropic/Gemini) dispatch logic a
+  fifth and sixth time. This mirrors `ragNode.ts`'s private `answerWithProvider`
+  almost exactly (same three request shapes) but factored out and exported.
+  `ragNode.ts` itself was left untouched rather than refactored to import this — its
+  own copy stays as-is per the "don't refactor unrelated code while you're in there"
+  rule; the duplication between the two is now two copies instead of six.
+- **`apps/worker/src/nodes/textClassifierNode.ts`** (new, `type: 'textClassifier'`) —
+  takes a comma-separated category list, returns `{ category, categories, confidence }`
+  restricted to categories that were actually in the allowed list (filters out any
+  hallucinated label the model returns outside the given set).
+- **`apps/worker/src/nodes/sentimentAnalysisNode.ts`** (new, `type: 'sentimentAnalysis'`)
+  — returns a fixed `{ sentiment: 'positive'|'neutral'|'negative', score, reasoning }`
+  shape so IF/Switch nodes downstream can branch on `sentiment` directly rather than
+  parsing freeform text.
+- **`apps/worker/src/nodes/entityExtractorNode.ts`** (new, `type: 'entityExtractor'`) —
+  takes a plain-English field list (e.g. `"name: string, email: string, orderTotal:
+  number"`) instead of a strict JSON Schema, since skipping schema-authoring is the
+  point of a "micro" node; missing fields come back as `null` rather than omitted or
+  invented.
+- **`apps/worker/src/nodes/summarizerNode.ts`** (new, `type: 'summarizer'`) — plain-text
+  output (not JSON mode, since a summary is prose) with three styles: `concise` (N
+  sentences), `detailed` (paragraph), `bullets` (N bullets).
+- **`apps/worker/src/nodes/qaChainNode.ts`** (new, `type: 'qaChain'`) — answers a
+  question against a context string you already have (e.g. from an HTTP Request or
+  file read), explicitly **not** the same thing as `ragQuery`: this node has no
+  retrieval step at all, it just answers directly against whatever text you pass it —
+  the doc comment spells out when to use this vs. RAG. `requireContextOnly` (default
+  on) makes it refuse rather than guess when the context doesn't contain the answer,
+  and the node surfaces that as a `found: boolean` field.
+- **`apps/worker/src/nodes/index.ts`** — registered all five.
+- **`packages/shared-types/src/index.ts`** — added all five to the `NodeType` union.
+- **`apps/web/src/lib/credentialSchemas.ts`** — mapped all five to `'openai'` as the
+  default-selected credential type in `NODE_TYPE_TO_CREDENTIAL_TYPE` (same convention
+  `ragIngest`/`ragQuery`/`agent` already use: each node also accepts an `anthropic` or
+  `gemini` credential via its own `params.provider` enum, so the mapping is a sane
+  default for the credential picker, not a strict filter — no new credential types
+  needed since these ride on the three that already exist).
+- **`apps/web/src/lib/paramSchemas.ts`** — real forms for all five, including
+  `visibleIf`-gated `maxSentences`/`maxBullets` fields on the summarizer (same
+  show/hide-by-sibling-field technique the Date & Time node used two rounds ago).
+- **`apps/web/src/lib/nodeTypeMeta.ts`** — palette entries under `AI`.
+- **`apps/web/src/components/NodeIcon.tsx`** — added the `Tags`/`Smile`/`FileText`/
+  `MessageCircleQuestion` lucide imports these five nodes' palette entries need.
+  **Also fixed a real bug found while in this file**: last round's `localLlm` (`Server`
+  icon) and `groq` (`Zap` icon) palette entries referenced lucide keys that were never
+  actually imported/registered in `NodeIcon.tsx`'s `LUCIDE_ICONS` map, so those two
+  nodes' icons would have silently failed to render (falling back to whatever
+  `getNodeTypeMeta`'s default is) — both are now imported and registered alongside
+  this round's additions, since it's the same file/same class of edit, not an
+  unrelated refactor.
+
+### Not done in this pass
+
+- None of the five call into `agentNode`/`agentOrchestrator` as invocable tools yet —
+  they're standalone workflow nodes, not agent-callable functions. Wiring them up as
+  agent tools (so an AI Agent node could call "classify this" as one of its available
+  actions) is a reasonable follow-up but is really part of the agent-tooling surface,
+  not this micro-nodes gap.
+- `textClassifier`'s hallucination guard only filters the *category* labels against
+  the allowed list — it doesn't retry or re-prompt if the model returns zero valid
+  categories; in that case `category`/`categories` just come back empty/null rather
+  than erroring, which is a reasonable default but undocumented as a design choice
+  beyond this note.
+- `entityExtractor`'s schema description is free-text, not validated — a typo'd field
+  name just means that key won't exist in the model's response and `extracted` may be
+  missing it entirely rather than the node catching the mismatch.
+- No token/cost guardrails (e.g. truncating very long input text before it's spliced
+  into the prompt) — same behavior as the existing `openai`/`anthropic`/`gemini` nodes,
+  so consistent, not a new gap, but also not improved here.
+
+### Verified
+
+Ran `npx tsc --noEmit` in `packages/shared-types`, `apps/worker`, `apps/api`, and
+`apps/web` and diffed the full output byte-for-byte against last round's already-
+baseline-diffed log (itself diffed against a pristine unzip two rounds ago) — the diff
+is empty, i.e. the exact same pre-existing error set, zero new errors from any of the
+six new files, the `NodeIcon.tsx` edits, or the schema/registry wiring. Also wrote and
+ran a throwaway `ts-node` smoke script (not committed) that imports all five nodes
+directly and monkeypatches `axios.post` to return canned OpenAI-shaped completions
+keyed off a marker string in the prompt (so the real prompt-building, JSON-mode
+request flags, and response-parsing/field-mapping code all executes for real, only
+the network call itself is stubbed):
+- `textClassifier`: canned `{ categories: ['billing'], confidence: 0.92 }` came back
+  correctly as `category: 'billing'`.
+- `sentimentAnalysis`: canned negative-sentiment JSON mapped through to
+  `sentiment: 'negative'`, `score: -0.7` correctly.
+- `entityExtractor`: canned extraction JSON mapped through with the right field
+  values, including a `null` for a field not present in the source text.
+- `summarizer`: plain-text (non-JSON-mode) response passed through unchanged/trimmed.
+- `qaChain`: both the found-in-context path (`found: true`) and the explicit
+  not-found path (`found: false`, triggered by the exact refusal string this node's
+  prompt asks the model to use) were exercised and returned correctly.
+
+Did not test the `anthropic`/`gemini` provider branches of `callLlm` directly this
+round (same request shapes as `openai`, already verified last round for `localLlm`'s
+`openaiCompatible` path and in earlier rounds for the `anthropic`/`gemini` nodes
+themselves — the branching logic in `llmMicroNodeShared.ts` is new, but the per-
+provider request bodies are copied verbatim from `ragNode.ts`'s already-shipped
+`answerWithProvider`), and did not exercise any of the five through the real
+BullMQ queue/executor end-to-end.
+
+## Section D closeout note (this round)
+
+Picked up the last unchecked Section D row — the NL-to-workflow generator — and, per
+the loop's own rule about not claiming pre-existing work as this turn's deliverable,
+stopped as soon as it was clear this is **already fully built**, not a gap:
+
+- `POST /ai/generate-workflow` in `apps/api/src/routes/ai.ts` — a curated ~25-node
+  catalog embedded in the system prompt, JSON-mode OpenAI call, credential lookup via
+  `credentialId` (falling back to the server's `OPENAI_API_KEY`), and response
+  validation (rejects non-JSON model output with a clear 502 rather than passing
+  garbage through).
+- A complete "✨ Generate with AI" entry point in `apps/web/src/pages/CanvasPage.tsx`:
+  a header button, a command-palette action, and a modal with a textarea + busy state
+  + error display that calls the endpoint and replaces the canvas's nodes/edges with
+  the generated graph.
+
+This wasn't degraded or half-wired — both pieces work together end-to-end as shipped
+in an earlier round, just not one this checklist had previously been updated to
+reflect. No code was added or changed for this item; only the checklist row (flipped
+⛔ → ✅ with a note) and this README entry.
+
+**This closes out Section D entirely** — every row (AI Agent, agent memory,
+multi-agent orchestration, RAG, OpenAI/Anthropic/Gemini, local/self-hosted models,
+Groq/Mistral, dedicated micro-nodes, NL-to-workflow generator, human-in-the-loop) is
+now ✅.
+
+### Not done in this pass
+
+- Didn't re-verify the generator against a live OpenAI call this round (no network
+  egress to `api.openai.com` in this sandbox); this is unchanged/pre-existing code,
+  not something introduced this turn, so it wasn't re-tested.
+
+### Verified
+
+Read both files end-to-end (`apps/api/src/routes/ai.ts`'s `/generate-workflow`
+handler and `apps/web/src/pages/CanvasPage.tsx`'s `handleGenerateWithAI` + modal +
+button + command-palette wiring) and confirmed they're connected to each other (the
+frontend's `api.post('/ai/generate-workflow', ...)` call matches the backend route's
+path and request/response shape) rather than one being dead/orphaned code. Did not
+run `tsc` this entry since no files were modified.
+
+## AI Workflow Builder: node catalog refresh (this round)
+
+Follow-up to the closeout note above: the NL-to-workflow generator's node catalog
+(embedded in `/ai/generate-workflow`'s system prompt) predated this session's new AI
+nodes, so it would never suggest them. Refreshed it rather than leaving it stale.
+
+### What changed
+
+- **`apps/api/src/routes/ai.ts`** — `NODE_CATALOG` now lists `anthropic` and `gemini`
+  (existing node types that had been omitted from the catalog even before this
+  session, only `openai` was listed) alongside this session's additions: `groq`,
+  `mistral`, `localLlm`, and the five micro-nodes (`textClassifier`,
+  `sentimentAnalysis`, `entityExtractor`, `summarizer`, `qaChain`), each with its
+  params shape and credential type, matching the existing catalog's terse one-line-
+  per-node style. Also added a rule to `SYSTEM_PROMPT` telling the model to prefer the
+  dedicated micro-nodes over hand-rolling an equivalent JSON-mode prompt on a generic
+  provider node, so e.g. "classify support tickets by urgency" now generates a
+  `textClassifier` node instead of a bespoke `openai` node with a hand-written
+  classification prompt.
+
+### Not done in this pass
+
+- Didn't add the newer non-AI nodes from recent rounds (Filter, Split Out, Aggregate,
+  Sort, Limit, Remove Duplicates, Compare Datasets, Date & Time, HTML Extract,
+  Markdown⇄HTML, XML⇄JSON, Crypto, Compression, Text parser, etc.) to the catalog —
+  scoped this pass to the AI-node gap that was actually flagged, since auditing and
+  refreshing the entire ~86-type catalog against every prior round's additions is a
+  larger, separate cleanup task rather than a quick follow-up.
+- The catalog is still a hand-maintained string in `ai.ts`, not generated from
+  `apps/web/src/lib/nodeTypeMeta.ts` or any other single source of truth — so it will
+  drift again the next time new node types ship unless someone remembers to update it.
+  A follow-up that generates this catalog string automatically (e.g. from a shared
+  node-metadata module both the API and web app import) would close that gap for
+  good; flagged here rather than built, since it touches how node metadata is shared
+  across the API/worker/web boundary and deserves its own design pass.
+
+### Verified
+
+Ran `npx tsc --noEmit` in all four workspaces and diffed against the last verified
+baseline log — identical pre-existing error set, zero new errors (this was a
+string-literal-only change in one file, no type surface touched). Did not call the
+live endpoint (no `api.openai.com` egress in this sandbox) — read the diff by eye to
+confirm the added lines match the existing catalog's format exactly (name, category,
+params shape, credential type) so the system prompt still parses as a single coherent
+block for the model.
+
+## Item Lists node (this round)
+
+Closes the last remaining ⛔ row in **Section C — Data-transformation utility nodes**: n8n's "Item Lists" node, which bundles three array-manipulation operations that had no FlowForge equivalent (Split Out, Aggregate, Sort, Limit, Remove Duplicates, and Compare Datasets were all already shipped as standalone nodes; these three weren't).
+
+### What changed
+
+- **`apps/worker/src/nodes/itemListsNode.ts`** (new, `type: 'itemLists'`) — three operations behind a `mode` param:
+  - **`chunk`**: collapses N input items into batches of a fixed size, each becoming one output item whose `destinationField` (default `"chunk"`) holds an array of the source items' JSON objects, plus `chunkIndex` and `chunkSize` metadata. Useful for rate-limited downstream APIs that can only accept X records per call.
+  - **`flatten`**: the inverse of n8n's "Split Out" but one level deeper — given a field whose value is an array-of-arrays (or deeper nesting), unwraps elements all the way to individual items. `depth: 'shallow'` (default) mirrors Split Out exactly; `depth: 'deep'` applies `Array.flat(Infinity)` for arbitrarily nested sources. Items whose field isn't an array pass through untouched, matching n8n's non-destructive pass-through.
+  - **`dedupe`**: first-seen-wins deduplication by a dot-notation `key` field (or the entire JSON-stringified item when `key` is blank). Preserves original order, resets per execution — distinct from the existing `removeDuplicates` node, which sorts before comparing and breaks ties differently; both are kept because the tie-breaking behavior difference is intentional and documented in the worker source.
+- **`apps/worker/src/nodes/index.ts`** — registered `itemListsNode`.
+- **`packages/shared-types/src/index.ts`** — added `'itemLists'` to the `NodeType` union. Also back-filled the dozen node types from recent rounds that had been registered in the worker registry and palette but never added to the union (`filter`, `splitOut`, `aggregate`, `sort`, `limit`, `removeDuplicates`, `compareDatasets`, `noOp`, `dateTime`, `htmlExtract`, `markdownHtml`, `xmlJson`, `crypto`, `compression`, `textParser`, `stopAndError`, `rssTrigger`, `mqttTrigger`, `formTrigger`, `executeWorkflowTrigger`) — these were pre-existing gaps in the union, not regressions introduced this round, and are not new errors in the tsc run.
+- **`apps/web/src/lib/paramSchemas.ts`** — real form with `visibleIf`-gated sub-fields per mode: `chunkSize` + `destinationField` (chunk only), `field` + `depth` enum (flatten only), `key` (dedupe only).
+- **`apps/web/src/lib/nodeTypeMeta.ts`** — palette entry under the `Data` category with `lucide:List` icon.
+- **`apps/web/src/components/NodeIcon.tsx`** — imported and registered the `List` lucide icon (was not previously in the `LUCIDE_ICONS` map).
+
+### Not done in this pass
+
+- The `chunk` mode doesn't carry binary attachments through (same decision as `aggregate` — there's no sensible single `pairedItem` for a chunk). If a user needs to batch items that carry binary data, they should use Split Out → process → re-Aggregate instead.
+- `flatten` with `depth: 'deep'` uses `Array.flat(Infinity)` — if a field is genuinely a deeply recursive structure (e.g. a tree of unknown depth), this will blow out to a very large item count without any warning or guard. Same tradeoff n8n makes.
+- The three operations are co-located in one node (one `mode` param), mirroring n8n's bundled "Item Lists" node. If you prefer three separate nodes like the rest of FlowForge's approach, they could be split; kept bundled to match n8n's UX exactly for the parity checklist.
+
+### Verified
+
+Ran `npx tsc --noEmit` in `packages/shared-types` (zero output, zero errors), `apps/worker` (only the pre-existing `moduleResolution=node10` deprecation warning, zero new errors), `apps/api` (same single pre-existing warning), and `apps/web` (zero output, zero errors). The deprecation warning was already present before this round and is not related to any of this round's changes.
+
+Confirmed zero new TypeScript errors across all four workspaces by diffing the tsc output against last round's verified baseline — identical warning set.

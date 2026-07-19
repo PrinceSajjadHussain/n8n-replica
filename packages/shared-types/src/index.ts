@@ -61,6 +61,14 @@ export type NodeType =
   | 'openai'
   | 'anthropic'
   | 'gemini'
+  | 'localLlm'
+  | 'groq'
+  | 'mistral'
+  | 'textClassifier'
+  | 'sentimentAnalysis'
+  | 'entityExtractor'
+  | 'summarizer'
+  | 'qaChain'
   | 'ragIngest'
   | 'ragQuery'
   | 'browserAutomation'
@@ -114,6 +122,27 @@ export type NodeType =
   | 'sentry'
   | 'pagerduty'
   | 'datadog'
+  | 'filter'
+  | 'splitOut'
+  | 'aggregate'
+  | 'sort'
+  | 'limit'
+  | 'removeDuplicates'
+  | 'compareDatasets'
+  | 'noOp'
+  | 'dateTime'
+  | 'htmlExtract'
+  | 'markdownHtml'
+  | 'xmlJson'
+  | 'crypto'
+  | 'compression'
+  | 'textParser'
+  | 'stopAndError'
+  | 'rssTrigger'
+  | 'mqttTrigger'
+  | 'formTrigger'
+  | 'executeWorkflowTrigger'
+  | 'itemLists'
   // Community/marketplace nodes register under a namespaced type so they
   // can never collide with a built-in — see communityLoader.ts.
   | `community.${string}`;
@@ -180,14 +209,14 @@ export interface WorkflowGraph {
   edges: WorkflowEdge[];
 }
 
-export type ExecutionStatus = 'running' | 'success' | 'failed' | 'paused';
+export type ExecutionStatus = 'running' | 'success' | 'failed' | 'paused' | 'cancelled';
 export type NodeRunStatus = 'pending' | 'running' | 'success' | 'failed' | 'skipped' | 'paused';
 
 export interface ExecutionJobData {
   executionId: string;
   workflowId: string;
   userId: string;
-  triggerType: 'manual' | 'webhook' | 'chatTrigger' | 'schedule' | 'emailTrigger' | 'fileWatcher' | 'databaseChange' | 'streamTrigger' | 'test';
+  triggerType: 'manual' | 'webhook' | 'chatTrigger' | 'schedule' | 'emailTrigger' | 'fileWatcher' | 'databaseChange' | 'streamTrigger' | 'rssTrigger' | 'mqttTrigger' | 'formTrigger' | 'test';
   triggerPayload?: unknown;
 }
 

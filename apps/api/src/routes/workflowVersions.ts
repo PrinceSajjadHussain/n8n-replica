@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import type { AuthedRequest } from '../middleware/auth';
 import { requireAuth } from '../middleware/auth';
 import { pool } from '../db/pool';
+import { activateWorkflowPollers } from '../utils/triggerActivation';
 
 /**
  * Draft vs. published workflow versions, rollback, and a diff endpoint.
@@ -52,6 +53,13 @@ async function publishVersion(workflowId: string, version: number, userId: strin
   await pool.query(
     `UPDATE "WorkflowVersion" SET status = 'published' WHERE "workflowId" = $1 AND version = $2`,
     [workflowId, version]
+  );
+  // Publishing sets isActive=true above, and node params (feed URL, MQTT
+  // topic, watched path, etc.) may have changed in this version — restart
+  // any poller-based triggers so they pick up the new config immediately
+  // rather than on the next explicit activate toggle.
+  await activateWorkflowPollers(workflowId, userId).catch((err) =>
+    console.error(`Failed to (re)activate poller-based triggers for workflow ${workflowId} after publish:`, err instanceof Error ? err.message : err)
   );
 }
 

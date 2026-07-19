@@ -46,6 +46,7 @@ interface WebhookHttpResponse {
 }
 
 const DEFAULT_WEBHOOK_TIMEOUT_MS = Number(process.env.WEBHOOK_RESPONSE_TIMEOUT_MS ?? 30000);
+export { DEFAULT_WEBHOOK_TIMEOUT_MS };
 
 /**
  * Waits for the execution to produce a response, per n8n's three webhook
@@ -100,6 +101,56 @@ export function waitForWebhookResponse(
     statusEvents.on(executionId, onEvent);
   });
 }
+
+/**
+ * Test webhook endpoint — n8n-style: runs against the workflow's current
+ * DRAFT graph (nodesJson, not publishedNodesJson) and doesn't require the
+ * workflow to be active/published. Lets someone iterate on a webhook-
+ * triggered workflow from the canvas before going live. Otherwise
+ * identical to the production endpoint below (same response-mode
+ * handling), just under a different path prefix and gate.
+ */
+webhookRouter.post('/test/:workflowId/:path', async (req, res) => {
+  const { workflowId, path } = req.params;
+
+  const wfResult = await pool.query(
+    `SELECT id, "userId", "workspaceId", "nodesJson" FROM "Workflow" WHERE id = $1`,
+    [workflowId]
+  );
+  const workflow = wfResult.rows[0];
+  if (!workflow) {
+    return res.status(404).json({ error: 'Workflow not found' });
+  }
+
+  const nodes = workflow.nodesJson as Array<{ type: string; params?: Record<string, unknown> }>;
+  const webhookNode = nodes.find((n) => n.type === 'webhook' && (n.params?.path ?? 'default') === path);
+  if (!webhookNode) {
+    return res.status(404).json({ error: 'No webhook trigger matches this path in the current draft' });
+  }
+
+  const responseMode = (webhookNode.params?.responseMode as string | undefined) ?? 'immediately';
+  const executionId = randomUUID();
+  const jobData: ExecutionJobData = {
+    executionId,
+    workflowId: workflow.id,
+    userId: workflow.userId,
+    triggerType: 'webhook',
+    triggerPayload: { body: req.body, query: req.query, headers: req.headers },
+  };
+
+  if (responseMode !== 'lastNode' && responseMode !== 'responseNode') {
+    const job = await executionQueue.add('execute', jobData);
+    return res.status(202).json({ message: 'Test webhook received, execution enqueued', jobId: job.id });
+  }
+
+  const waiter = waitForWebhookResponse(executionId, responseMode, DEFAULT_WEBHOOK_TIMEOUT_MS);
+  await executionQueue.add('execute', jobData);
+  const response = await waiter;
+  if (response.headers) {
+    for (const [key, value] of Object.entries(response.headers)) res.setHeader(key, value);
+  }
+  res.status(response.statusCode).json(response.body);
+});
 
 /**
  * Public webhook endpoint — no auth required (this IS the trigger).

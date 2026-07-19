@@ -9,6 +9,7 @@ import CommandPalette, { type CommandItem } from './CommandPalette';
 import TourGuide from './TourGuide';
 import { useProductTour } from '../lib/productTour';
 import { useIsMobile } from '../lib/useMediaQuery';
+import ToastViewport from './ToastViewport';
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const location = useLocation();
@@ -170,6 +171,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen flex flex-col sm:flex-row">
+      <ToastViewport />
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}

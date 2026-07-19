@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
+import { toast } from '../store/toastStore';
 import ExpressionAutocomplete, { type ExpressionSuggestion } from './ExpressionAutocomplete';
 import AgentTraceViewer from './AgentTraceViewer';
 import CredentialQuickCreateModal from './CredentialQuickCreateModal';
 import SwitchCasesEditor from './SwitchCasesEditor';
+import IfConditionsEditor from './IfConditionsEditor';
 import ParamForm from './Paramform';
 import { getParamSchema } from '../lib/paramSchemas';
 import { getNodeTypeMeta } from '../lib/nodeTypeMeta';
@@ -28,6 +30,8 @@ interface Props {
   otherNodeLabels?: string[];
   /** Current workflow id, used only to render the webhook node's "final URL" preview. */
   workflowId?: string;
+  /** When the canvas is in replay mode, the execution currently being viewed — "Run workflow from here" reuses that execution's cached upstream outputs instead of the latest one. */
+  replayExecutionId?: string;
   /** params.path of every other webhook node on the canvas, for the duplicate-path warning. */
   siblingWebhookPaths?: string[];
   /** params.path of every other chatTrigger node on the canvas, for the duplicate-path warning. */
@@ -73,6 +77,7 @@ export default function NodeConfigPanel({
   notes,
   otherNodeLabels = [],
   workflowId,
+  replayExecutionId,
   siblingWebhookPaths = [],
   siblingChatPaths = [],
   hasRespondToWebhookNode = false,
@@ -98,6 +103,7 @@ export default function NodeConfigPanel({
   const [testResult, setTestResult] = useState<unknown>(undefined);
   const [testItems, setTestItems] = useState<Array<{ json: unknown; binary?: Record<string, { mimeType: string; fileName?: string; fileSize?: number }> }> | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
+  const [runFromHereBusy, setRunFromHereBusy] = useState(false);
   const [credTestBusy, setCredTestBusy] = useState(false);
   const [credTestResult, setCredTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
@@ -113,6 +119,38 @@ export default function NodeConfigPanel({
       setCredTestResult({ ok: false, message: err?.response?.data?.error ?? 'Test connection failed.' });
     } finally {
       setCredTestBusy(false);
+    }
+  }
+
+  /**
+   * "Run workflow from here" (n8n's "Execute step"/"pin data and continue"
+   * pattern). Rather than always running the whole chain from the trigger,
+   * this re-runs starting at this node, reusing every *upstream* node's
+   * cached output from a past execution — the worker's executor already
+   * supports this via POST /executions/:id/retry-from/:nodeId (see
+   * executionsRouter), we're just exposing it in the canvas UI. Uses the
+   * execution currently open in the replay scrubber if there is one,
+   * otherwise falls back to the workflow's most recent execution.
+   */
+  async function handleRunFromHere() {
+    if (!workflowId) return;
+    setRunFromHereBusy(true);
+    try {
+      let sourceExecutionId = replayExecutionId;
+      if (!sourceExecutionId) {
+        const { data } = await api.get(`/workflows/${workflowId}/executions`);
+        sourceExecutionId = data.executions?.[0]?.id;
+      }
+      if (!sourceExecutionId) {
+        toast.error('No past execution to run from yet — run the whole workflow once first.');
+        return;
+      }
+      await api.post(`/executions/${sourceExecutionId}/retry-from/${nodeId}`);
+      toast.success(`Running workflow from "${label}"…`);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error ?? 'Failed to start run from this node');
+    } finally {
+      setRunFromHereBusy(false);
     }
   }
 
@@ -185,6 +223,12 @@ export default function NodeConfigPanel({
   }
 
   function commitSwitchParams(nextParams: Record<string, unknown>) {
+    setParamsJson(JSON.stringify(nextParams, null, 2));
+    setJsonError(null);
+    onChange({ params: nextParams });
+  }
+
+  function commitIfParams(nextParams: Record<string, unknown>) {
     setParamsJson(JSON.stringify(nextParams, null, 2));
     setJsonError(null);
     onChange({ params: nextParams });
@@ -403,8 +447,9 @@ export default function NodeConfigPanel({
 
         <div>
           {nodeType === 'switch' && <SwitchCasesEditor params={params} onCommit={commitSwitchParams} />}
+          {(nodeType === 'if' || nodeType === 'filter') && <IfConditionsEditor params={params} onCommit={commitIfParams} />}
 
-          {paramSchema && (
+          {paramSchema && (paramSchema.fields.length > 0 || nodeType === 'if' || nodeType === 'filter' || nodeType === 'switch') && (
             <div className="flex items-center justify-between mb-2">
               <p className="text-xs uppercase tracking-widest text-muted">Parameters</p>
               <button
@@ -417,7 +462,7 @@ export default function NodeConfigPanel({
             </div>
           )}
 
-          {paramSchema && !showRawJson && (
+          {paramSchema && paramSchema.fields.length > 0 && !showRawJson && (
             <ParamForm
               nodeType={nodeType}
               schema={paramSchema}
@@ -495,13 +540,25 @@ export default function NodeConfigPanel({
             rows={3}
             className="focus-ring w-full bg-canvas border border-panelBorder rounded-md px-2 py-1 text-xs font-display mb-2"
           />
-          <button
-            onClick={handleTestNode}
-            disabled={testBusy}
-            className="focus-ring text-xs px-3 py-1.5 rounded-md border border-signal/40 text-signal hover:bg-signal/10 disabled:opacity-50"
-          >
-            {testBusy ? 'Running…' : '▶ Run this node in isolation'}
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={handleTestNode}
+              disabled={testBusy}
+              className="focus-ring text-xs px-3 py-1.5 rounded-md border border-signal/40 text-signal hover:bg-signal/10 disabled:opacity-50"
+            >
+              {testBusy ? 'Running…' : '▶ Run this node in isolation'}
+            </button>
+            {workflowId && (
+              <button
+                onClick={handleRunFromHere}
+                disabled={runFromHereBusy}
+                title="Runs the real workflow starting at this node, reusing upstream nodes' cached outputs from a past execution instead of re-triggering the whole chain"
+                className="focus-ring text-xs px-3 py-1.5 rounded-md border border-panelBorder text-muted hover:text-ink hover:border-signal/40 disabled:opacity-50"
+              >
+                {runFromHereBusy ? 'Starting…' : '⏩ Run workflow from here'}
+              </button>
+            )}
+          </div>
           {testError && <p className="text-alert text-xs mt-2">{testError}</p>}
           {testItems && (
             <p className="text-[11px] text-muted mt-2">
@@ -589,6 +646,30 @@ function paramHint(nodeType: string): string {
       return 'e.g. { "url": "https://api.example.com", "method": "GET" }';
     case 'if':
       return 'e.g. { "field": "amount", "operator": "greaterThan", "value": 100 }';
+    case 'filter':
+      return 'e.g. { "field": "amount", "operator": "greaterThan", "value": 100 } — items that don\'t match the condition(s) are dropped; unlike IF there\'s only one output, no true/false branches';
+    case 'compareDatasets':
+      return 'e.g. { "matchFields": "id", "compareFields": "status,updatedAt" } — requires two upstream connections (Dataset A, Dataset B). Each output item is tagged _compare: "same" | "different" | "onlyInA" | "onlyInB" — route with a downstream IF/Switch/Filter on that field for a 4-way split.';
+    case 'compareDatasets':
+      return 'e.g. { "matchFields": "id", "compareFields": "status,updatedAt" } — requires two upstream connections (Dataset A, Dataset B). Each output item is tagged _compare: "same" | "different" | "onlyInA" | "onlyInB" — route with a downstream IF/Switch/Filter on that field for a 4-way split.';
+    case 'executeWorkflowTrigger':
+      return 'e.g. { "inputSchema": [{ "name": "orderId", "type": "string", "required": true }] } — typed entry point for a workflow meant to be called via a subWorkflow node; validates the caller\'s payload against this schema and throws a clear error if it doesn\'t match. Leave inputSchema empty to accept anything.';
+    case 'noOp':
+      return 'No params. Passes items through completely unchanged — useful as a canvas anchor point.';
+    case 'dateTime':
+      return 'e.g. { "operation": "format", "sourceField": "createdAt", "format": "date" } — operations: format | addSubtract | difference | now.';
+    case 'htmlExtract':
+      return 'e.g. { "sourceField": "html", "extractions": [{ "key": "title", "selector": "h1", "multiple": false }] }';
+    case 'markdownHtml':
+      return 'e.g. { "direction": "toHtml", "sourceField": "markdown", "destinationField": "html" }';
+    case 'xmlJson':
+      return 'e.g. { "direction": "toJson", "sourceField": "xml", "destinationField": "json" }';
+    case 'crypto':
+      return 'e.g. { "operation": "hash", "algorithm": "sha256", "sourceField": "payload" } — operations: hash | hmac | sign | randomBytes.';
+    case 'compression':
+      return 'e.g. { "operation": "gzip", "binaryProperty": "data" } — operations: zip | unzip | gzip | gunzip.';
+    case 'textParser':
+      return 'e.g. { "operation": "match", "sourceField": "text", "pattern": "\\\\d+", "flags": "g" } — operations: match | matchAll | test | split | replace.';
     case 'set':
       return 'e.g. { "mappings": [{ "targetPath": "summary", "staticValue": "done" }] }';
     case 'code':

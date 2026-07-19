@@ -459,6 +459,7 @@ enum ExecutionStatus {
   success
   failed
   paused
+  cancelled
 }
 
 enum TriggerType {

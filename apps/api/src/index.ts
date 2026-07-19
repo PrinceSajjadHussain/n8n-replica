@@ -10,6 +10,7 @@ import { marketplaceRouter } from './routes/marketplace';
 import { credentialsRouter } from './routes/credentials';
 import { executionsRouter } from './routes/executions';
 import { webhookRouter } from './routes/webhook';
+import { formRouter } from './routes/form';
 import { chatRouter } from './routes/chat';
 import { aiRouter } from './routes/ai';
 import { resumeRouter, publicResumeRouter } from './routes/resume';
@@ -30,6 +31,7 @@ import { queueAdminRouter } from './routes/queueAdmin';
 import { billingRouter, billingWebhookRouter } from './routes/billing';
 import { pool } from './db/pool';
 import { createRedisConnection } from './queue/queue';
+import { reconcileAllWorkflowPollersOnBoot } from './utils/triggerActivation';
 
 const app = express();
 app.use(cors());
@@ -37,6 +39,7 @@ app.use(cors());
 // mounted ahead of the global express.json() below so it never gets parsed.
 app.use('/billing', billingWebhookRouter);
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 app.get('/health', (_req, res) => {
   const sample: WorkflowGraph = { nodes: [], edges: [] };
@@ -84,6 +87,7 @@ app.use('/credentials', credentialsRouter);
 app.use('/executions', executionsRouter);
 app.use('/executions', resumeRouter);
 app.use('/webhook', webhookRouter);
+app.use('/form', formRouter);
 app.use('/chat', chatRouter);
 app.use('/webhook-resume', publicResumeRouter);
 app.use('/nodes', nodeTestRouter);
@@ -101,4 +105,7 @@ initRealtime(httpServer);
 const port = process.env.PORT ?? 4000;
 httpServer.listen(port, () => {
   console.log(`FlowForge API listening on :${port}`);
+  reconcileAllWorkflowPollersOnBoot().catch((err) =>
+    console.error('Boot-time trigger poller reconciliation failed:', err instanceof Error ? err.message : err)
+  );
 });

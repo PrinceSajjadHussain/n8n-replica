@@ -72,6 +72,7 @@ import {
   finishNodeRunSuccess,
   finishNodeRunFailure,
   markNodeSkipped,
+  getExecutionStatus,
   markExecutionPaused,
   getPausedExecution,
   clearCheckpointAndMarkRunning,
@@ -86,7 +87,7 @@ import {
 export type StatusEmitter = (event: {
   executionId: string;
   nodeId?: string;
-  status: 'running' | 'success' | 'failed' | 'skipped' | 'started' | 'completed' | 'paused' | 'webhook-response';
+  status: 'running' | 'success' | 'failed' | 'skipped' | 'started' | 'completed' | 'paused' | 'webhook-response' | 'cancelled';
   output?: unknown;
   input?: unknown;
   error?: string;
@@ -196,7 +197,7 @@ interface RunOptions {
   staticData: Record<string, unknown>; // workflow static-data blob ($staticData.KEY / $getWorkflowStaticData()), snapshotted once per top-level run
 }
 
-async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'failed' | 'paused' }> {
+async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'failed' | 'paused' | 'cancelled' }> {
   const { executionId, workflowId, workspaceId, triggerPayload, emit, state, persist, nodeIdPrefix, depth, vars, staticData } = opts;
   const { nodes, edges } = stripAnnotationNodes(opts.nodes, opts.edges);
   const { outputs, nodeStatus, branchTaken } = state;
@@ -210,9 +211,29 @@ async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'faile
   const levels = computeLevels(nodes, edges);
   let anyFailure = [...nodeStatus.values()].includes('failed');
 
+  // Cancel-from-canvas: POST /executions/:id/cancel (apps/api/src/routes/executions.ts)
+  // flips the Execution row's status to 'cancelled' directly in Postgres.
+  // Rather than threading an in-memory abort signal through BullMQ (which
+  // would need per-job wiring and wouldn't survive a worker restart), we
+  // poll that row once per level — cheap, and means a cancel takes effect
+  // as soon as the in-flight level finishes rather than mid-node.
+  let cancelled = false;
+
   for (const level of levels) {
     const pending = level.filter((id) => !nodeStatus.has(id));
     if (pending.length === 0) continue;
+
+    if (persist && !cancelled) {
+      cancelled = (await getExecutionStatus(executionId)) === 'cancelled';
+    }
+    if (cancelled) {
+      for (const nodeId of pending) {
+        nodeStatus.set(nodeId, 'skipped');
+        if (persist) await markNodeSkipped(executionId, nodeId);
+        emit({ executionId, nodeId: nodeIdPrefix + nodeId, status: 'skipped' });
+      }
+      continue;
+    }
 
     const toRun: string[] = [];
     for (const nodeId of pending) {
@@ -273,6 +294,7 @@ async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'faile
     }
   }
 
+  if (cancelled) return { status: 'cancelled' };
   anyFailure = anyFailure || [...nodeStatus.values()].includes('failed');
   return { status: anyFailure ? 'failed' : 'success' };
 
@@ -654,7 +676,7 @@ export async function executeWorkflow(
   emit: StatusEmitter = () => {},
   depth = 0,
   presetExecutionId?: string
-): Promise<{ executionId: string; status: 'success' | 'failed' | 'paused'; output?: unknown }> {
+): Promise<{ executionId: string; status: 'success' | 'failed' | 'paused' | 'cancelled'; output?: unknown }> {
   const executionId = await createExecution(workflowId, triggerType, presetExecutionId);
   const wfRow = await getWorkflow(workflowId);
   const workspaceId = wfRow?.workspaceId ?? null;
@@ -664,7 +686,7 @@ export async function executeWorkflow(
   const vars = await getVariablesMapForWorkflow(workflowId);
   const staticData = await getWorkflowStaticData(workflowId);
   const state: RunState = { outputs: new Map(), nodeStatus: new Map(), branchTaken: new Map() };
-  let result: { status: 'success' | 'failed' | 'paused' };
+  let result: { status: 'success' | 'failed' | 'paused' | 'cancelled' };
   try {
     result = await runLevels({
       executionId,
@@ -692,6 +714,15 @@ export async function executeWorkflow(
 
   if (result.status === 'paused') {
     return { executionId, status: 'paused' };
+  }
+
+  if (result.status === 'cancelled') {
+    // The cancel endpoint already set status='cancelled'/finishedAt on the
+    // Execution row (that's what the poll above detected) — no alert or
+    // error-workflow dispatch for a deliberate cancel, just notify listeners.
+    emit({ executionId, status: 'cancelled' });
+    await dispatchLogStreamEvent(workspaceId, { workflowId, executionId, status: 'cancelled' });
+    return { executionId, status: 'cancelled' };
   }
 
   const { nodes: execNodes, edges: execEdges } = stripAnnotationNodes(graph.nodes, graph.edges);
@@ -723,7 +754,7 @@ export async function resumeExecution(
   executionId: string,
   resumeInput: unknown,
   emit: StatusEmitter = () => {}
-): Promise<{ executionId: string; status: 'success' | 'failed' | 'paused'; output?: unknown }> {
+): Promise<{ executionId: string; status: 'success' | 'failed' | 'paused' | 'cancelled'; output?: unknown }> {
   const paused = await getPausedExecution(executionId);
   if (!paused) throw new Error(`No paused execution found with id ${executionId}`);
   const wf = await getWorkflow(paused.workflowId);
@@ -750,7 +781,7 @@ export async function resumeExecution(
   const graph: WorkflowGraph = { nodes: wf.nodesJson as WorkflowNode[], edges: wf.edgesJson as WorkflowEdge[] };
   const vars = await getVariablesMapForWorkflow(paused.workflowId);
   const staticData = await getWorkflowStaticData(paused.workflowId);
-  let result: { status: 'success' | 'failed' | 'paused' };
+  let result: { status: 'success' | 'failed' | 'paused' | 'cancelled' };
   try {
     result = await runLevels({
       executionId,
@@ -777,6 +808,11 @@ export async function resumeExecution(
   }
 
   if (result.status === 'paused') return { executionId, status: 'paused' };
+  if (result.status === 'cancelled') {
+    emit({ executionId, status: 'cancelled' });
+    await dispatchLogStreamEvent(workspaceId, { workflowId: paused.workflowId, executionId, status: 'cancelled' });
+    return { executionId, status: 'cancelled' };
+  }
 
   const { nodes: execNodes, edges: execEdges } = stripAnnotationNodes(graph.nodes, graph.edges);
   const leaves = leafNodeIds(execNodes, execEdges);
@@ -813,7 +849,7 @@ export async function retryFromNode(
   originalExecutionId: string,
   retryNodeId: string,
   emit: StatusEmitter = () => {}
-): Promise<{ executionId: string; status: 'success' | 'failed' | 'paused'; output?: unknown }> {
+): Promise<{ executionId: string; status: 'success' | 'failed' | 'paused' | 'cancelled'; output?: unknown }> {
   const original = await getExecutionForRetry(originalExecutionId);
   if (!original) throw new Error(`Execution ${originalExecutionId} not found`);
   const wf = await getWorkflow(original.workflowId);
@@ -860,7 +896,7 @@ export async function retryFromNode(
 
   const vars = await getVariablesMapForWorkflow(original.workflowId);
   const staticData = await getWorkflowStaticData(original.workflowId);
-  let result: { status: 'success' | 'failed' | 'paused' };
+  let result: { status: 'success' | 'failed' | 'paused' | 'cancelled' };
   try {
     result = await runLevels({
       executionId,
@@ -887,6 +923,11 @@ export async function retryFromNode(
   }
 
   if (result.status === 'paused') return { executionId, status: 'paused' };
+  if (result.status === 'cancelled') {
+    emit({ executionId, status: 'cancelled' });
+    await dispatchLogStreamEvent(workspaceId, { workflowId: original.workflowId, executionId, status: 'cancelled' });
+    return { executionId, status: 'cancelled' };
+  }
 
   const { nodes: execNodes, edges: execEdges } = stripAnnotationNodes(graph.nodes, graph.edges);
   const leaves = leafNodeIds(execNodes, execEdges);

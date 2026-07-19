@@ -87,7 +87,7 @@ export async function dispatchLogStreamEvent(
   event: {
     workflowId: string;
     executionId: string;
-    status: 'started' | 'completed' | 'failed';
+    status: 'started' | 'completed' | 'failed' | 'cancelled';
     error?: string | null;
   }
 ): Promise<void> {

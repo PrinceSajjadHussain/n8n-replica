@@ -27,6 +27,16 @@ slack         (integration) params: { text }  credential type "slack" { webhookU
 email         (integration) params: { to, subject, body } credential type "smtp"
 googleSheets  (integration) params: { spreadsheetId, range, values? } credential type "google"
 openai        (ai)        params: { model?, systemPrompt?, prompt, temperature?, jsonMode? } credential type "openai" { apiKey }
+anthropic     (ai)        params: { model?, systemPrompt?, prompt, temperature?, maxTokens? } credential type "anthropic" { apiKey }
+gemini        (ai)        params: { model?, systemPrompt?, prompt, temperature?, maxOutputTokens?, jsonMode? } credential type "gemini" { apiKey }
+groq          (ai)        params: { model?, systemPrompt?, prompt, temperature?, jsonMode? } credential type "groq" { apiKey } — fast open-model hosting (Llama/Mixtral/Gemma)
+mistral       (ai)        params: { model?, systemPrompt?, prompt, temperature?, jsonMode? } credential type "mistral" { apiKey }
+localLlm      (ai)        params: { provider: "ollama"|"openaiCompatible", baseUrl?, model?, systemPrompt?, prompt, temperature?, jsonMode? } credential type "localLlm" (optional apiKey) — self-hosted Ollama/vLLM/LM Studio, no cloud API key needed
+textClassifier (ai)       params: { provider?: "openai"|"anthropic"|"gemini", model?, text, categories: "a, b, c", multiLabel? } credential type "openai"/"anthropic"/"gemini" — returns { category, categories, confidence }
+sentimentAnalysis (ai)    params: { provider?, model?, text } — returns { sentiment: "positive"|"neutral"|"negative", score, reasoning }
+entityExtractor (ai)      params: { provider?, model?, text, schemaDescription: "name: string, email: string, ..." } — returns { extracted: {...} }
+summarizer    (ai)        params: { provider?, model?, text, style?: "concise"|"detailed"|"bullets", maxSentences?, maxBullets? } — returns { summary }
+qaChain       (ai)        params: { provider?, model?, context, question, requireContextOnly? } — answers a question directly from given context text, no retrieval step (use ragQuery instead if the answer needs to be found across a whole knowledge base)
 ragIngest     (ai)        params: { namespace, text? or documents? } credential type "openai"
 ragQuery      (ai)        params: { namespace, query, topK?, answerWithModel? } credential type "openai"
 agent         (ai)        params: { sessionId?, systemPrompt?, prompt, tools?: [{name,nodeType,description,parameters}], model?, maxSteps?, recentTurns?, longTermMemory?, recallTopK? } credential type "openai" — tool-using agent with short-term + long-term vector memory
@@ -47,6 +57,7 @@ Rules:
 - Space nodes left-to-right: x += 260 per step, keep y around 200-400, branch nodes offset in y.
 - Use "if" node's sourceHandle "true"/"false" on its outgoing edges when branching.
 - Only use node types from the catalog below. Prefer real integrations (openai, ragIngest/ragQuery, httpRequest, slack) over stubs when relevant.
+- For classification/sentiment/extraction/summarization/context Q&A tasks, prefer the dedicated micro-nodes (textClassifier, sentimentAnalysis, entityExtractor, summarizer, qaChain) over hand-prompting a generic openai/anthropic/gemini node with a custom JSON-mode prompt — they're purpose-built for exactly those tasks and return a predictable output shape.
 - Keep params minimal but valid/realistic for the request.
 - Do not invent credentialId values; leave credentialId unset (the user attaches credentials afterwards).
 

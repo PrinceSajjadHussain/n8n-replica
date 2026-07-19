@@ -10,6 +10,13 @@ const redisConnection = createRedisConnection();
 const executionQueue = createExecutionQueue(redisConnection);
 const queueEvents = new QueueEvents(EXECUTION_QUEUE_NAME, { connection: createRedisConnection() });
 
+// Same Redis pub/sub channel the worker publishes execution-status events to
+// (see apps/worker/src/pubsub/publisher.ts) — reused here so a cancel is
+// reflected on the canvas immediately instead of waiting for the worker's
+// once-per-level cancellation poll to notice the DB row changed.
+const STATUS_CHANNEL = 'flowforge:execution-status';
+const statusPublisher = createRedisConnection();
+
 export const executionsRouter = Router();
 executionsRouter.use(requireAuth);
 
@@ -30,6 +37,44 @@ executionsRouter.get('/:id', async (req: AuthedRequest, res) => {
   );
 
   res.json({ execution, nodeRuns: nodeRuns.rows });
+});
+
+/**
+ * POST /executions/:id/cancel — "cancel-from-canvas". Only valid while the
+ * execution is still running or paused (waitForWebhook/humanApproval).
+ * Flips the Execution row to 'cancelled' directly (rather than trying to
+ * kill the BullMQ job in-flight) and publishes to the same status channel
+ * the worker uses, so connected canvases update immediately; the worker's
+ * own level-by-level poll (see runLevels in engine/executor.ts) picks up
+ * the change on its own even if this publish is somehow missed, so a
+ * cancel always eventually takes effect even under a dropped pub/sub message.
+ */
+executionsRouter.post('/:id/cancel', async (req: AuthedRequest, res) => {
+  const result = await pool.query(
+    `SELECT e.id, e.status, e."workflowId" FROM "Execution" e
+     JOIN "Workflow" w ON w.id = e."workflowId"
+     WHERE e.id = $1 AND w."userId" = $2`,
+    [req.params.id, req.userId!]
+  );
+  const execution = result.rows[0];
+  if (!execution) return res.status(404).json({ error: 'Execution not found' });
+  if (execution.status !== 'running' && execution.status !== 'paused') {
+    return res.status(409).json({ error: `Execution is already ${execution.status}, nothing to cancel` });
+  }
+
+  await pool.query(
+    `UPDATE "Execution" SET status = 'cancelled', "finishedAt" = now() WHERE id = $1`,
+    [execution.id]
+  );
+
+  await statusPublisher
+    .publish(
+      STATUS_CHANNEL,
+      JSON.stringify({ workflowId: execution.workflowId, executionId: execution.id, status: 'cancelled' })
+    )
+    .catch((err) => console.error('Failed to publish cancellation event', err));
+
+  res.json({ id: execution.id, status: 'cancelled' });
 });
 
 /**
