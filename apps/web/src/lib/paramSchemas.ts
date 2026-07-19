@@ -224,7 +224,15 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
 
   chatTrigger: {
     fields: [
-      { key: 'path', label: 'Chat path', type: 'string', default: 'default', help: 'Matches the :path segment in POST /chat/:workflowId/:path.' },
+      {
+        key: 'path',
+        label: 'Chat path',
+        type: 'string',
+        default: 'default',
+        placeholder: 'default',
+        help: 'Matches the :path segment in POST /chat/:workflowId/:path.',
+        validate: (v) => (v && !/^[a-zA-Z0-9\-_]+$/.test(String(v)) ? 'Only letters, numbers, - and _ are allowed' : null),
+      },
       {
         key: 'responseMode',
         label: 'Response mode',
@@ -234,6 +242,7 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
           { value: 'lastNode', label: 'Reply with final node output (default)' },
           { value: 'responseNode', label: 'Reply via a "Respond to Webhook" node' },
         ],
+        help: 'lastNode replies with whatever the workflow\u2019s last node outputs — simplest option, good for a single ragQuery/agent reply. Pick responseNode only if you need to shape the reply explicitly (e.g. combine multiple nodes\u2019 output) with a "Respond to Webhook" node placed wherever the reply is ready.',
       },
     ],
   },

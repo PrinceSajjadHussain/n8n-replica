@@ -870,6 +870,11 @@ function CanvasPageDesktop() {
               .filter((n) => n.id !== selectedNode.id && n.data.nodeType === 'webhook')
               .map((n) => String((n.data.params as Record<string, unknown> | undefined)?.path ?? ''))
               .filter(Boolean)}
+            siblingChatPaths={nodes
+              .filter((n) => n.id !== selectedNode.id && n.data.nodeType === 'chatTrigger')
+              .map((n) => String((n.data.params as Record<string, unknown> | undefined)?.path ?? 'default'))
+              .filter(Boolean)}
+            hasRespondToWebhookNode={nodes.some((n) => n.data.nodeType === 'respondToWebhook')}
             onChange={updateSelectedNode}
             onDelete={deleteSelectedNode}
             onClose={() => setSelectedNodeId(null)}

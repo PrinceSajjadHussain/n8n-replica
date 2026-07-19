@@ -270,6 +270,12 @@ the same key wins for workflows in that workspace. Resolved once per top-level e
 (`getVariablesMapForWorkflow`) and threaded through nested `subWorkflow`/`forEachBranch`
 runs, resumes, and retries.
 
+`npm run seed --workspace=@flowforge/api` (also wired to `prisma db seed`) populates 50+
+instance-wide defaults out of the box — integration base URLs (Slack, Stripe, OpenAI,
+Anthropic, GitHub, Shopify, etc.), HTTP timeout/retry/pagination defaults, feature flags,
+execution/billing defaults — see `apps/api/prisma/seed.ts` for the full list. Idempotent:
+safe to re-run, only fills in keys that don't already exist.
+
 ```
 GET/POST      /variables?workspaceId=...     list (global + workspace-scoped) / create
 PATCH/DELETE  /variables/:id                 rename key or change value / delete
@@ -641,9 +647,23 @@ than conflated into one.
   a phase explicitly needs a new field.
 - **UI**: `apps/web/src/pages/DataTablesPage.tsx` at `/data-tables` — pick a workspace,
   pick a table, edit cells inline (blur-to-save), add/delete rows, create a table by
-  typing a comma-separated column list. No bulk import/export or per-column type
-  validation UI yet (`columns[].type` is stored and sent to the API but not yet enforced
-  client-side beyond the identifier-format check on the name).
+  typing a comma-separated column list (`name` or `name:type`, e.g.
+  `amount:currency, dueDate:date, tags:multiSelect`).
+- **Column type catalog** (`packages/shared-types/src/columnTypes.ts`) — 25 types shared
+  between the API's Zod validation (`COLUMN_TYPE_IDS`) and the web picker: `string`,
+  `text`, `richText`, `number`, `integer`, `float`, `boolean`, `date`, `datetime`, `time`,
+  `duration`, `json`, `array`, `email`, `url`, `phone`, `uuid`, `select`, `multiSelect`,
+  `color`, `currency`, `percent`, `ipAddress`, `geoPoint`, `file`, `secret`. Each entry
+  carries a description, an example value, and a storage shape (`string` / `number` /
+  `boolean` / `object` / `array`); `coerceColumnValue()` loosely coerces a raw cell to that
+  shape on write without ever throwing (a bad cell falls back to the raw value rather than
+  blocking the row). Still DB-agnostic — rows stay JSONB, so type is a validation/UI hint,
+  not a Postgres constraint.
+- **Seeded example**: `npm run seed --workspace=@flowforge/api` creates a "Data Type
+  Showcase" table (one column per type, with a filled + a blank example row) in every
+  existing workspace — see `apps/api/prisma/seed.ts`.
+- Still no bulk CSV import/export for Data Table rows — rows are added/edited one at a
+  time through the UI or via the `Data Table: Insert/Update/Delete` node.
 
 ### Workflow static data — `$getWorkflowStaticData()`/`$setWorkflowStaticData()`
 
@@ -1501,3 +1521,44 @@ was checked instead: brace/paren balance on every edited file, that every new ex
 this section's claims as "should work, reviewed by hand" rather than "build-verified" like
 the phases above — run `pnpm install && pnpm dev` and try the template for real before
 relying on it in production.
+
+## Onboarding product tour, 25-type Data Tables, seeded defaults (this round)
+
+### What changed
+
+- **Product tour** — `apps/web/src/components/TourGuide.tsx` (dependency-free spotlight
+  overlay: dims the page, cuts a highlighted hole around the target element via
+  `box-shadow`, positions a tooltip beside it, recalculates on scroll/resize) and
+  `apps/web/src/lib/productTour.ts` (10-step walkthrough — Workflows → Workspaces →
+  Credentials → Variables → Data Tables → Templates → Marketplace → Billing → ⌘K search
+  — plus a `localStorage` flag so it auto-opens once for new users and never nags
+  returning ones). Wired into `AppShell.tsx`: every sidebar link got a
+  `data-tour="nav-*"` attribute, a "✨ Take a tour" button was added under the nav, and
+  it's callable from the ⌘K command palette ("Take a tour of FlowForge"). Works in both
+  the desktop sidebar and the mobile drawer since they share the same markup.
+- **Data Table column types**: expanded from 5 (`string`/`number`/`boolean`/`date`/`json`)
+  to 25 — see the updated "Data Table" section above for the full list and
+  `packages/shared-types/src/columnTypes.ts`.
+- **Seed script** (`apps/api/prisma/seed.ts`, `npm run seed --workspace=@flowforge/api`,
+  also wired to `prisma db seed`): 50+ default instance-wide Variables, and a "Data Type
+  Showcase" Data Table per existing workspace demonstrating all 25 column types.
+- **Marketplace install errors**: a genuine npm 404 (package/version doesn't exist on the
+  real registry — some curated catalog entries in `registryIndex.ts` are illustrative
+  manifest-shape examples, not published packages) now returns a clear message instead of
+  looking like a server error.
+
+### Not done in this pass
+
+- The tour only covers the app shell/sidebar; there's no in-canvas tour step for actually
+  building a workflow (dragging a node, connecting an edge, running it) — a natural
+  follow-up once the shell tour is confirmed useful.
+- Tour completion state is per-browser (`localStorage`), not per-user-account — it'll
+  re-offer itself on a new device even for an existing user.
+- See `flowforge-remaining-features-prompt.md` (repo root) for the fuller list of
+  integrations/features not yet built, organized by priority for a future pass.
+
+### Verified
+
+`tsc --noEmit` clean on both `apps/api` and `apps/web` after these changes; all three
+locale files (`en`/`es`/`ur`) validated as parseable JSON with the new `nav.tour` key
+added to each.

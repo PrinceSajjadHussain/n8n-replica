@@ -30,6 +30,10 @@ interface Props {
   workflowId?: string;
   /** params.path of every other webhook node on the canvas, for the duplicate-path warning. */
   siblingWebhookPaths?: string[];
+  /** params.path of every other chatTrigger node on the canvas, for the duplicate-path warning. */
+  siblingChatPaths?: string[];
+  /** Whether a "Respond to Webhook" node exists anywhere else on the canvas. */
+  hasRespondToWebhookNode?: boolean;
   onChange: (updates: {
     label?: string;
     params?: Record<string, unknown>;
@@ -70,6 +74,8 @@ export default function NodeConfigPanel({
   otherNodeLabels = [],
   workflowId,
   siblingWebhookPaths = [],
+  siblingChatPaths = [],
+  hasRespondToWebhookNode = false,
   onChange,
   onDelete,
   onClose,
@@ -421,6 +427,8 @@ export default function NodeConfigPanel({
               extraSuggestions={nodeSuggestions}
               workflowId={workflowId}
               siblingWebhookPaths={siblingWebhookPaths}
+              siblingChatPaths={siblingChatPaths}
+              hasRespondToWebhookNode={hasRespondToWebhookNode}
             />
           )}
 
@@ -573,6 +581,8 @@ function paramHint(nodeType: string): string {
   switch (nodeType) {
     case 'webhook':
       return 'e.g. { "path": "orders" } — this becomes /webhook/:workflowId/orders';
+    case 'chatTrigger':
+      return 'e.g. { "path": "default", "responseMode": "lastNode" } — this becomes POST /chat/:workflowId/default';
     case 'schedule':
       return 'e.g. { "cron": "*/5 * * * *" }';
     case 'httpRequest':
@@ -637,6 +647,36 @@ function paramHint(nodeType: string): string {
       return 'e.g. { "format": "csv", "binaryProperty": "data" } — reads an upstream binary attachment and parses it into items. "format": "csv" (one output item per row) | "json" (array -> one item per element, object -> single item) | "text" (whole file as { "text": ... }). Set "dropBinary": true to not carry the original file through to the parsed items.';
     case 'fileConvert':
       return 'e.g. { "format": "csv", "fileName": "export.csv", "binaryProperty": "data" } — flattens all input items\u2019 json into a single downloadable file attached to one output item. "format": "csv" | "json". Send it on via email/HTTP/Slack, or return it from "Respond to Webhook".';
+    case 'trello':
+      return 'e.g. { "action": "createCard", "listId": "...", "name": "New card" } — requires a "trello" credential { "apiKey", "token" }';
+    case 'asana':
+      return 'e.g. { "action": "createTask", "projectId": "...", "name": "New task" } — requires an "asana" credential { "accessToken" }';
+    case 'clickup':
+      return 'e.g. { "action": "createTask", "listId": "...", "name": "New task" } — requires a "clickup" credential { "apiToken" }';
+    case 'linear':
+      return 'e.g. { "action": "createIssue", "teamId": "...", "title": "Bug" } — requires a "linear" credential { "apiKey" }';
+    case 'jira':
+      return 'e.g. { "action": "createIssue", "projectKey": "ENG", "summary": "Bug", "issueType": "Task" } — requires a "jira" credential { "siteUrl", "email", "apiToken" }';
+    case 'msTeams':
+      return 'e.g. { "text": "Deploy finished ✅", "title": "CI" } — requires a "msTeams" credential { "webhookUrl" }';
+    case 'outlook':
+      return 'e.g. { "action": "sendMail", "to": "a@b.com", "subject": "Hi", "body": "..." } — requires connecting a Microsoft credential';
+    case 'googleDrive':
+      return 'e.g. { "action": "listFiles", "query": "name contains \'report\'" } — requires connecting a Google credential (drive scope)';
+    case 'dropbox':
+      return 'e.g. { "action": "listFolder", "path": "" } — requires a "dropbox" credential { "accessToken" }';
+    case 'zoom':
+      return 'e.g. { "action": "createMeeting", "topic": "Standup", "startTime": "2026-08-01T09:00:00Z" } — requires a "zoom" credential { "accessToken" }';
+    case 'mongodb':
+      return 'e.g. { "database": "app", "collection": "orders", "action": "find", "filter": { "status": "paid" } } — requires a "mongodb" credential { "connectionString" }';
+    case 'mysql':
+      return 'e.g. { "query": "SELECT * FROM orders WHERE id = ?", "values": [123] } — requires a "mysql" credential { "connectionString" }';
+    case 'sentry':
+      return 'e.g. { "action": "listIssues", "projectSlug": "backend", "query": "is:unresolved" } — requires a "sentry" credential { "authToken", "organizationSlug" }';
+    case 'pagerduty':
+      return 'e.g. { "action": "triggerIncident", "summary": "DB latency spike", "severity": "critical" } — requires a "pagerduty" credential { "routingKey" }';
+    case 'datadog':
+      return 'e.g. { "action": "submitMetric", "metricName": "flowforge.orders", "value": 1, "tags": ["env:prod"] } — requires a "datadog" credential { "apiKey" }';
     default:
       return 'Configure this node\u2019s parameters as JSON.';
   }

@@ -78,9 +78,23 @@ marketplaceRouter.post('/install', async (req: AuthedRequest, res, next) => {
     const userId = req.userId!;
     const { npmPackage, version } = installSchema.parse(req.body);
 
-    const metaResponse = await axios.get(`https://registry.npmjs.org/${encodeURIComponent(npmPackage)}/${version ?? 'latest'}`, {
-      timeout: 15000,
-    });
+    let metaResponse;
+    try {
+      metaResponse = await axios.get(`https://registry.npmjs.org/${encodeURIComponent(npmPackage)}/${version ?? 'latest'}`, {
+        timeout: 15000,
+      });
+    } catch (fetchErr: any) {
+      if (fetchErr?.response?.status === 404) {
+        // Genuine npm 404 — the package/version doesn't exist on the real
+        // registry. Some curated catalog entries here are illustrative
+        // examples of the manifest shape (see registryIndex.ts) rather than
+        // packages that are actually published; this isn't a FlowForge bug.
+        return res.status(404).json({
+          error: `"${npmPackage}${version ? `@${version}` : ''}" was not found on the public npm registry. Double-check the package name/version, or publish it first if this is your own package.`,
+        });
+      }
+      throw fetchErr;
+    }
     const meta = metaResponse.data as {
       name: string;
       version: string;

@@ -20,6 +20,21 @@ export const CREDENTIAL_TYPES = [
   'openai',
   'anthropic',
   'gemini',
+  'trello',
+  'asana',
+  'clickup',
+  'linear',
+  'jira',
+  'msTeams',
+  'dropbox',
+  'zoom',
+  'mongodb',
+  'mysql',
+  'sentry',
+  'pagerduty',
+  'datadog',
+  'outlook',
+  'googleDrive',
 ] as const;
 
 export type CredentialType = (typeof CREDENTIAL_TYPES)[number];
@@ -50,6 +65,21 @@ export const CREDENTIAL_TYPE_META: Record<CredentialType, { label: string; color
   openai: { label: 'OpenAI', color: '#10A37F', letter: 'AI' },
   anthropic: { label: 'Anthropic', color: '#D97757', letter: 'A' },
   gemini: { label: 'Gemini', color: '#4285F4', letter: 'G' },
+  trello: { label: 'Trello', color: '#0052CC', letter: 'T' },
+  asana: { label: 'Asana', color: '#F06A6A', letter: 'A' },
+  clickup: { label: 'ClickUp', color: '#7B68EE', letter: 'C' },
+  linear: { label: 'Linear', color: '#5E6AD2', letter: 'L' },
+  jira: { label: 'Jira', color: '#0052CC', letter: 'J' },
+  msTeams: { label: 'Microsoft Teams', color: '#6264A7', letter: 'T' },
+  dropbox: { label: 'Dropbox', color: '#0061FF', letter: 'D' },
+  zoom: { label: 'Zoom', color: '#2D8CFF', letter: 'Z' },
+  mongodb: { label: 'MongoDB', color: '#47A248', letter: 'M' },
+  mysql: { label: 'MySQL', color: '#4479A1', letter: 'M' },
+  sentry: { label: 'Sentry', color: '#362D59', letter: 'S' },
+  pagerduty: { label: 'PagerDuty', color: '#06AC38', letter: 'P' },
+  datadog: { label: 'Datadog', color: '#632CA6', letter: 'D' },
+  outlook: { label: 'Outlook', color: '#0078D4', letter: 'O' },
+  googleDrive: { label: 'Google Drive', color: '#0F9D58', letter: 'G' },
 };
 
 export const CREDENTIAL_FIELDS: Record<CredentialType, CredentialField[]> = {
@@ -194,6 +224,162 @@ export const CREDENTIAL_FIELDS: Record<CredentialType, CredentialField[]> = {
       helpText: 'From aistudio.google.com/apikey. Used for both the Gemini node and as the "gemini" embeddingProvider/answerProvider option on RAG nodes.',
     },
   ],
+  trello: [
+    { key: 'apiKey', label: 'API key', fieldType: 'password', required: true, placeholder: '...', helpText: 'From trello.com/app-key.' },
+    { key: 'token', label: 'Token', fieldType: 'password', required: true, placeholder: '...', helpText: 'Generate a token from the same app-key page.' },
+  ],
+  asana: [
+    {
+      key: 'accessToken',
+      label: 'Personal access token',
+      fieldType: 'password',
+      required: true,
+      placeholder: '2/...',
+      helpText: 'From your Asana profile settings → Apps → Manage Developer Apps → Personal Access Tokens.',
+    },
+  ],
+  clickup: [
+    {
+      key: 'apiToken',
+      label: 'API token',
+      fieldType: 'password',
+      required: true,
+      placeholder: 'pk_...',
+      helpText: 'From ClickUp settings → Apps.',
+    },
+  ],
+  linear: [
+    {
+      key: 'apiKey',
+      label: 'API key',
+      fieldType: 'password',
+      required: true,
+      placeholder: 'lin_api_...',
+      helpText: 'From Linear settings → Security & access → Personal API keys.',
+    },
+  ],
+  jira: [
+    { key: 'siteUrl', label: 'Site URL', fieldType: 'text', required: true, placeholder: 'https://yourorg.atlassian.net' },
+    { key: 'email', label: 'Account email', fieldType: 'text', required: true, placeholder: 'you@yourorg.com' },
+    {
+      key: 'apiToken',
+      label: 'API token',
+      fieldType: 'password',
+      required: true,
+      placeholder: '...',
+      helpText: 'From id.atlassian.com/manage-profile/security/api-tokens.',
+    },
+  ],
+  msTeams: [
+    {
+      key: 'webhookUrl',
+      label: 'Incoming Webhook URL',
+      fieldType: 'password',
+      required: true,
+      placeholder: 'https://...webhook.office.com/webhookb2/...',
+      helpText: 'Channel → Connectors → Incoming Webhook in Microsoft Teams.',
+    },
+  ],
+  dropbox: [
+    {
+      key: 'accessToken',
+      label: 'Access token',
+      fieldType: 'password',
+      required: true,
+      placeholder: 'sl.u.-...',
+      helpText: 'Generate from your app on the Dropbox App Console.',
+    },
+  ],
+  zoom: [
+    {
+      key: 'accessToken',
+      label: 'Access token',
+      fieldType: 'password',
+      required: true,
+      placeholder: '...',
+      helpText: 'Server-to-Server OAuth app token from the Zoom App Marketplace — short-lived, may need periodic refresh.',
+    },
+  ],
+  mongodb: [
+    {
+      key: 'connectionString',
+      label: 'Connection string',
+      fieldType: 'password',
+      required: true,
+      placeholder: 'mongodb+srv://user:pass@cluster.mongodb.net',
+      helpText: 'This is a target database for the MongoDB node to query — not FlowForge\u2019s own database.',
+    },
+  ],
+  mysql: [
+    {
+      key: 'connectionString',
+      label: 'Connection string',
+      fieldType: 'password',
+      required: true,
+      placeholder: 'mysql://user:pass@host:3306/db',
+      helpText: 'This is a target database for the MySQL node to query — not FlowForge\u2019s own database.',
+    },
+  ],
+  sentry: [
+    { key: 'organizationSlug', label: 'Organization slug', fieldType: 'text', required: true, placeholder: 'my-org' },
+    {
+      key: 'authToken',
+      label: 'Auth token',
+      fieldType: 'password',
+      required: true,
+      placeholder: '...',
+      helpText: 'From Sentry → Settings → Auth Tokens (needs project:read/write scopes).',
+    },
+  ],
+  pagerduty: [
+    {
+      key: 'routingKey',
+      label: 'Events API routing key',
+      fieldType: 'password',
+      placeholder: '...',
+      helpText: 'From a PagerDuty service\u2019s Integrations tab (Events API v2) — needed for trigger/acknowledge/resolve.',
+    },
+    {
+      key: 'apiToken',
+      label: 'REST API token (optional)',
+      fieldType: 'password',
+      placeholder: '...',
+      helpText: 'From PagerDuty → My Profile → User Settings — only needed for listing incidents.',
+    },
+  ],
+  datadog: [
+    { key: 'apiKey', label: 'API key', fieldType: 'password', required: true, placeholder: '...', helpText: 'Organization Settings → API Keys.' },
+    {
+      key: 'appKey',
+      label: 'Application key (optional)',
+      fieldType: 'password',
+      placeholder: '...',
+      helpText: 'Only needed for querying metrics, not submitting them.',
+    },
+    {
+      key: 'site',
+      label: 'Site (optional)',
+      fieldType: 'text',
+      placeholder: 'datadoghq.com',
+      helpText: 'Defaults to datadoghq.com — use datadoghq.eu etc. for other regions.',
+    },
+  ],
+  outlook: [
+    {
+      key: 'note',
+      label: '',
+      fieldType: 'info',
+      helpText: 'Use "Connect with Microsoft" on the Credentials page instead — it stores a real OAuth token this node can use directly. This manual form is only a fallback.',
+    },
+  ],
+  googleDrive: [
+    {
+      key: 'note',
+      label: '',
+      fieldType: 'info',
+      helpText: 'Use "Connect with Google" on the Credentials page instead — the same OAuth credential used by Google Sheets/Gmail/Calendar works here since Drive scope is already requested.',
+    },
+  ],
 };
 
 export function defaultFieldValues(type: CredentialType): Record<string, string> {
@@ -236,4 +422,19 @@ export const NODE_TYPE_TO_CREDENTIAL_TYPE: Record<string, CredentialType> = {
   // browserAutomation has no credential type of its own yet (uses
   // BROWSER_RUNNER_URL/KEY env vars) — omitted on purpose so the node panel
   // shows a generic "any credential" picker instead of a broken filter.
+  trello: 'trello',
+  asana: 'asana',
+  clickup: 'clickup',
+  linear: 'linear',
+  jira: 'jira',
+  msTeams: 'msTeams',
+  outlook: 'outlook',
+  googleDrive: 'googleDrive',
+  dropbox: 'dropbox',
+  zoom: 'zoom',
+  mongodb: 'mongodb',
+  mysql: 'mysql',
+  sentry: 'sentry',
+  pagerduty: 'pagerduty',
+  datadog: 'datadog',
 };

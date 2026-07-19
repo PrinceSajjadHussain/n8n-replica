@@ -23,6 +23,9 @@ import './emailNode';
 import './googleSheetsNode';
 import './dataTableNode';
 import './fileNode';
+import './pmIntegrations';
+import './productivityIntegrations';
+import './devInfraIntegrations';
 
 import { loadCommunityNodes } from './communityLoader';
 loadCommunityNodes();

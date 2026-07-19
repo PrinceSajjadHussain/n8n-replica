@@ -6,6 +6,7 @@ import NodeIcon from '../components/NodeIcon';
 import FilterPillGroup from '../components/ui/FilterPillGroup';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
+import AppShell from '../components/AppShell';
 
 type Difficulty = 'beginner' | 'intermediate' | 'advanced';
 type SortMode = 'usage' | 'newest' | 'difficulty';
@@ -231,6 +232,7 @@ export default function TemplateGalleryPage() {
   }, [filtered, sortMode]);
 
   return (
+    <AppShell>
     <div className="min-h-screen bg-canvas text-ink p-8">
       <div className="flex items-center gap-3 mb-1">
         <Link to="/workflows" className="text-sm text-muted hover:text-ink">
@@ -321,5 +323,6 @@ export default function TemplateGalleryPage() {
         ))}
       </div>
     </div>
+    </AppShell>
   );
 }

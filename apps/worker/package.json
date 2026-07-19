@@ -19,6 +19,8 @@
     "ioredis": "^5.4.1",
     "isolated-vm": "^5.0.1",
     "mammoth": "^1.8.0",
+    "mongodb": "^6.8.0",
+    "mysql2": "^3.11.0",
     "pdf-parse": "^1.1.1",
     "pg": "^8.12.0"
   },

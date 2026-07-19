@@ -13,6 +13,10 @@ interface Props {
   workflowId?: string;
   /** params.path values of every other webhook node in this workflow, for the duplicate-path warning. */
   siblingWebhookPaths?: string[];
+  /** params.path values of every other chatTrigger node in this workflow, for the duplicate-path warning. */
+  siblingChatPaths?: string[];
+  /** Whether a "Respond to Webhook" node exists anywhere else in this workflow — used to warn when responseMode is set to responseNode but nothing will ever answer it. */
+  hasRespondToWebhookNode?: boolean;
 }
 
 const inputClass =
@@ -304,6 +308,8 @@ export default function ParamForm({
   extraSuggestions = [],
   workflowId,
   siblingWebhookPaths = [],
+  siblingChatPaths = [],
+  hasRespondToWebhookNode = false,
 }: Props) {
   return (
     <div className="grid gap-3">
@@ -317,6 +323,14 @@ export default function ParamForm({
 
       {nodeType === 'webhook' && (
         <WebhookGuidedExtras params={params} workflowId={workflowId} siblingPaths={siblingWebhookPaths} />
+      )}
+      {nodeType === 'chatTrigger' && (
+        <ChatGuidedExtras
+          params={params}
+          workflowId={workflowId}
+          siblingPaths={siblingChatPaths}
+          hasRespondToWebhookNode={hasRespondToWebhookNode}
+        />
       )}
       {nodeType === 'schedule' && <ScheduleGuidedExtras params={params} />}
       {nodeType === 'httpRequest' && <HttpRequestGuidedExtras params={params} onChange={onChange} />}
@@ -378,6 +392,9 @@ function HttpRequestGuidedExtras({
   );
 }
 
+/** The API server's own origin (never the web app's) — every trigger route (`/webhook`, `/chat`, ...) is mounted directly on it with no `/api` prefix. Matches the fallback in lib/api.ts. */
+const API_ORIGIN = import.meta.env.VITE_API_URL ?? 'http://localhost:4000';
+
 function WebhookGuidedExtras({
   params,
   workflowId,
@@ -388,7 +405,7 @@ function WebhookGuidedExtras({
   siblingPaths: string[];
 }) {
   const path = String(params.path ?? '');
-  const url = `${window.location.origin.replace(/:\d+$/, '')}/api/webhook/${workflowId ?? ':workflowId'}/${path || ':path'}`;
+  const url = `${API_ORIGIN}/webhook/${workflowId ?? ':workflowId'}/${path || ':path'}`;
   const isDuplicate = path.length > 0 && siblingPaths.includes(path);
   const [copied, setCopied] = useState(false);
 
@@ -414,6 +431,66 @@ function WebhookGuidedExtras({
       {isDuplicate && (
         <p className={errorClass}>
           Another webhook node in this workflow already uses path "{path}" — only one will ever be reachable.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ChatGuidedExtras({
+  params,
+  workflowId,
+  siblingPaths,
+  hasRespondToWebhookNode,
+}: {
+  params: Record<string, unknown>;
+  workflowId?: string;
+  siblingPaths: string[];
+  hasRespondToWebhookNode: boolean;
+}) {
+  const path = String(params.path ?? 'default');
+  const url = `${API_ORIGIN}/chat/${workflowId ?? ':workflowId'}/${path || 'default'}`;
+  const isDuplicate = path.length > 0 && siblingPaths.includes(path);
+  const responseMode = String(params.responseMode ?? 'lastNode');
+  const [copied, setCopied] = useState(false);
+
+  const examplePayload = `{ "message": "Hello!", "sessionId": "optional-thread-id" }`;
+
+  return (
+    <div className="border-t border-panelBorder pt-3 grid gap-3">
+      <div>
+        <label className={labelClass}>Final URL preview</label>
+        <div className="flex items-center gap-1.5">
+          <code className="flex-1 min-w-0 truncate text-[11px] bg-canvas border border-panelBorder rounded-md px-2 py-1.5">
+            {url}
+          </code>
+          <button
+            type="button"
+            onClick={() => {
+              navigator.clipboard.writeText(url).catch(() => {});
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1200);
+            }}
+            className="focus-ring text-xs px-2 py-1.5 rounded-md border border-panelBorder text-muted hover:text-ink shrink-0"
+          >
+            {copied ? '✓ Copied' : 'Copy'}
+          </button>
+        </div>
+        <p className={helpClass}>
+          POST here with a JSON body like <code className="text-[10px]">{examplePayload}</code>. The workflow must be
+          active — inactive workflows return 403. Reply is held open until the run finishes (default {60}s timeout).
+        </p>
+        {isDuplicate && (
+          <p className={errorClass}>
+            Another chat trigger in this workflow already uses path "{path}" — only one will ever be reachable.
+          </p>
+        )}
+      </div>
+      {responseMode === 'responseNode' && !hasRespondToWebhookNode && (
+        <p className={errorClass}>
+          Response mode is set to "Respond to Webhook", but this workflow has no "Respond to Webhook" node yet — every
+          chat message will time out after 60s with no reply. Add one wherever the reply is ready, or switch this
+          back to "Reply with final node output".
         </p>
       )}
     </div>

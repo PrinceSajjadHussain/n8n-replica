@@ -14,13 +14,16 @@ import {
   deleteDataTableRow,
 } from '../db/dataTables';
 import { getWorkspaceRole, roleAtLeast } from '../db/workspaces';
+import { COLUMN_TYPE_IDS } from '@flowforge/shared-types';
 
 export const dataTablesRouter = Router();
 dataTablesRouter.use(requireAuth);
 
+// 25-type catalog (string, number, boolean, date, json, email, url, uuid,
+// select, currency, geoPoint, secret, ...) — see packages/shared-types/src/columnTypes.ts
 const columnSchema = z.object({
   name: z.string().min(1).regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'Column names must look like an identifier'),
-  type: z.enum(['string', 'number', 'boolean', 'date', 'json']).default('string'),
+  type: z.enum(COLUMN_TYPE_IDS as [string, ...string[]]).default('string'),
 });
 
 async function requireRole(req: AuthedRequest, workspaceId: string, minRole: 'viewer' | 'editor' | 'admin') {

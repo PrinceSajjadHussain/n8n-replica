@@ -24,6 +24,13 @@ import {
   Share2,
   MonitorSmartphone,
   Puzzle,
+  Users,
+  HardDrive,
+  Video,
+  Database,
+  Bug,
+  Siren,
+  Activity,
   type LucideIcon,
 } from 'lucide-react';
 import {
@@ -80,6 +87,13 @@ const LUCIDE_ICONS: Record<string, LucideIcon> = {
   Share2,
   MonitorSmartphone,
   Puzzle,
+  Users,
+  HardDrive,
+  Video,
+  Database,
+  Bug,
+  Siren,
+  Activity,
 };
 
 /** Branded service marks, keyed by the `si:<name>` half of `iconKey`. CC0 via `simple-icons`. */

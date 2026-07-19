@@ -2,10 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api';
 import AppShell from '../components/AppShell';
 import EmptyState from '../components/EmptyState';
+import { COLUMN_TYPES, type ColumnTypeId } from '@flowforge/shared-types';
 
 interface Column {
   name: string;
-  type: 'string' | 'number' | 'boolean' | 'date' | 'json';
+  type: ColumnTypeId;
 }
 
 interface DataTable {
@@ -76,11 +77,18 @@ export default function DataTablesPage() {
     e.preventDefault();
     setError(null);
     try {
+      // Each entry is "columnName" (defaults to Single line text) or
+      // "columnName:type", where type is any id from the 25-type catalog
+      // below, e.g. "amount:currency, dueDate:date, tags:multiSelect".
       const columns: Column[] = newColumns
         .split(',')
         .map((c) => c.trim())
         .filter(Boolean)
-        .map((name) => ({ name, type: 'string' as const }));
+        .map((entry) => {
+          const [rawName, rawType] = entry.split(':').map((s) => s.trim());
+          const type = COLUMN_TYPES.find((t) => t.id === rawType)?.id ?? 'string';
+          return { name: rawName, type: type as ColumnTypeId };
+        });
       await api.post('/data-tables', { workspaceId, name: newTableName, columns });
       setShowNewTable(false);
       setNewTableName('');
@@ -245,12 +253,16 @@ export default function DataTablesPage() {
                 />
               </div>
               <div>
-                <label className="text-xs text-muted block mb-1">Columns (comma-separated)</label>
+                <label className="text-xs text-muted block mb-1">Columns (comma-separated, optionally name:type)</label>
                 <input
                   value={newColumns}
                   onChange={(e) => setNewColumns(e.target.value)}
+                  placeholder="name, amount:currency, dueDate:date, tags:multiSelect"
                   className="focus-ring w-full bg-transparent border border-panelBorder rounded-md px-2.5 py-1.5 text-sm font-mono"
                 />
+                <p className="text-[11px] text-muted mt-1">
+                  {COLUMN_TYPES.length} column types available — e.g. {COLUMN_TYPES.slice(0, 6).map((t) => t.id).join(', ')}, …
+                </p>
               </div>
               {error && <p className="text-xs text-alert">{String(error)}</p>}
               <div className="flex justify-end gap-2 pt-1">

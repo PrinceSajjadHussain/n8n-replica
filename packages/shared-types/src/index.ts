@@ -99,6 +99,21 @@ export type NodeType =
   | 'dataTableWrite'
   | 'fileExtract'
   | 'fileConvert'
+  | 'trello'
+  | 'asana'
+  | 'clickup'
+  | 'linear'
+  | 'jira'
+  | 'msTeams'
+  | 'outlook'
+  | 'googleDrive'
+  | 'dropbox'
+  | 'zoom'
+  | 'mongodb'
+  | 'mysql'
+  | 'sentry'
+  | 'pagerduty'
+  | 'datadog'
   // Community/marketplace nodes register under a namespaced type so they
   // can never collide with a built-in — see communityLoader.ts.
   | `community.${string}`;
@@ -207,3 +222,8 @@ export interface ExecutionStatusEvent {
   workflowId: string;
   status: ExecutionStatus;
 }
+
+// ---------------------------------------------------------------------------
+// Data Table column types (25-type catalog) — see columnTypes.ts for detail.
+// ---------------------------------------------------------------------------
+export * from './columnTypes';

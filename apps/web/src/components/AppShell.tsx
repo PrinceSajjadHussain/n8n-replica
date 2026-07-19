@@ -6,6 +6,8 @@ import { api } from '../lib/api';
 import ThemeToggle from './ThemeToggle';
 import LanguageSwitcher from './LanguageSwitcher';
 import CommandPalette, { type CommandItem } from './CommandPalette';
+import TourGuide from './TourGuide';
+import { useProductTour } from '../lib/productTour';
 import { useIsMobile } from '../lib/useMediaQuery';
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
@@ -18,16 +20,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [credentials, setCredentials] = useState<{ id: string; name?: string; type: string }[]>([]);
   const isMobile = useIsMobile();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const tour = useProductTour();
 
   const links = [
-    { to: '/workflows', label: t('nav.workflows') },
-    { to: '/workspaces', label: t('nav.workspaces') },
-    { to: '/credentials', label: t('nav.credentials') },
-    { to: '/variables', label: t('nav.variables') },
-    { to: '/data-tables', label: t('nav.dataTables') },
-    { to: '/templates', label: t('nav.templates') },
-    { to: '/marketplace', label: t('nav.marketplace') },
-    { to: '/billing', label: t('nav.billing') },
+    { to: '/workflows', label: t('nav.workflows'), tour: 'nav-workflows' },
+    { to: '/workspaces', label: t('nav.workspaces'), tour: 'nav-workspaces' },
+    { to: '/credentials', label: t('nav.credentials'), tour: 'nav-credentials' },
+    { to: '/variables', label: t('nav.variables'), tour: 'nav-variables' },
+    { to: '/data-tables', label: t('nav.dataTables'), tour: 'nav-dataTables' },
+    { to: '/templates', label: t('nav.templates'), tour: 'nav-templates' },
+    { to: '/marketplace', label: t('nav.marketplace'), tour: 'nav-marketplace' },
+    { to: '/billing', label: t('nav.billing'), tour: 'nav-billing' },
   ];
 
   function handleLogout() {
@@ -78,6 +81,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         run: () => navigate(link.to),
       })),
       { id: 'nav-new-workflow', label: 'New workflow', group: 'Navigate', run: () => navigate('/workflows') },
+      { id: 'start-tour', label: 'Take a tour of FlowForge', group: 'Help', run: () => tour.start() },
       ...workflows.map((wf) => ({
         id: `workflow-${wf.id}`,
         label: wf.name,
@@ -115,6 +119,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <Link
             key={link.to}
             to={link.to}
+            data-tour={link.tour}
             className={`focus-ring block px-3 py-2 rounded-md text-sm transition ${
               location.pathname.startsWith(link.to)
                 ? 'bg-signal/10 text-signal'
@@ -126,10 +131,19 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         ))}
         <button
           onClick={() => setPaletteOpen(true)}
+          data-tour="nav-search"
           className="focus-ring w-full flex items-center justify-between px-3 py-2 rounded-md text-sm text-muted hover:text-ink hover:bg-canvas transition mt-1"
         >
           <span>{t('nav.search')}</span>
           <span className="text-[10px] border border-panelBorder rounded px-1.5 py-0.5">⌘K</span>
+        </button>
+        <button
+          onClick={tour.start}
+          data-tour="tour-welcome"
+          className="focus-ring w-full flex items-center justify-between px-3 py-2 rounded-md text-sm text-muted hover:text-ink hover:bg-canvas transition"
+        >
+          <span>{t('nav.tour', 'Take a tour')}</span>
+          <span aria-hidden>✨</span>
         </button>
       </nav>
       <div className="px-3 py-4 border-t border-panelBorder space-y-3">
@@ -162,6 +176,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         commands={commands}
         placeholder="Jump to a page, workflow, or credential…"
       />
+
+      {tour.isOpen && (
+        <TourGuide
+          steps={tour.steps}
+          stepIndex={tour.stepIndex}
+          onNext={tour.next}
+          onBack={tour.back}
+          onClose={tour.close}
+          onNavigate={(route) => navigate(route)}
+        />
+      )}
 
       {isMobile ? (
         <>
