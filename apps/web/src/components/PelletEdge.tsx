@@ -21,7 +21,6 @@ export default function PelletEdge({
   style,
   markerEnd,
   animated,
-  className,
 }: EdgeProps) {
   const [edgePath] = getBezierPath({
     sourceX,
@@ -40,7 +39,7 @@ export default function PelletEdge({
 
   return (
     <>
-      <BaseEdge id={id} path={edgePath} style={style} markerEnd={markerEnd} className={className} />
+      <BaseEdge id={id} path={edgePath} style={style} markerEnd={markerEnd} />
       {isActive && (
         <EdgeLabelRenderer>
           <svg width="0" height="0" style={{ position: 'absolute' }}>

@@ -38,6 +38,26 @@ export const CREDENTIAL_TYPES = [
   'datadog',
   'outlook',
   'googleDrive',
+  'paypal',
+  'quickbooks',
+  'xero',
+  'zendesk',
+  'mailchimp',
+  'sendgrid',
+  'segment',
+  'googleAds',
+  'metaAds',
+  'amplitude',
+  'mixpanel',
+  'calendly',
+  'docusign',
+  'elasticsearch',
+  'sftp',
+  'linkedin',
+  'twitter',
+  'facebook',
+  'instagram',
+  'youtube',
 ] as const;
 
 export type CredentialType = (typeof CREDENTIAL_TYPES)[number];
@@ -86,6 +106,26 @@ export const CREDENTIAL_TYPE_META: Record<CredentialType, { label: string; color
   datadog: { label: 'Datadog', color: '#632CA6', letter: 'D' },
   outlook: { label: 'Outlook', color: '#0078D4', letter: 'O' },
   googleDrive: { label: 'Google Drive', color: '#0F9D58', letter: 'G' },
+  paypal: { label: 'PayPal', color: '#00457C', letter: 'P' },
+  quickbooks: { label: 'QuickBooks', color: '#2CA01C', letter: 'Q' },
+  xero: { label: 'Xero', color: '#13B5EA', letter: 'X' },
+  zendesk: { label: 'Zendesk', color: '#03363D', letter: 'Z' },
+  mailchimp: { label: 'Mailchimp', color: '#FFE01B', letter: 'M' },
+  sendgrid: { label: 'SendGrid', color: '#51A9E3', letter: 'S' },
+  segment: { label: 'Segment', color: '#52BD94', letter: 'S' },
+  googleAds: { label: 'Google Ads', color: '#4285F4', letter: 'G' },
+  metaAds: { label: 'Meta Ads', color: '#0081FB', letter: 'M' },
+  amplitude: { label: 'Amplitude', color: '#0A80E4', letter: 'A' },
+  mixpanel: { label: 'Mixpanel', color: '#7856FF', letter: 'M' },
+  calendly: { label: 'Calendly', color: '#006BFF', letter: 'C' },
+  docusign: { label: 'DocuSign', color: '#FFCC22', letter: 'D' },
+  elasticsearch: { label: 'Elasticsearch', color: '#005571', letter: 'E' },
+  sftp: { label: 'SFTP / FTP', color: '#6B7280', letter: 'F' },
+  linkedin: { label: 'LinkedIn', color: '#0A66C2', letter: 'L' },
+  twitter: { label: 'X (Twitter)', color: '#000000', letter: 'X' },
+  facebook: { label: 'Facebook', color: '#0866FF', letter: 'F' },
+  instagram: { label: 'Instagram', color: '#E4405F', letter: 'I' },
+  youtube: { label: 'YouTube', color: '#FF0000', letter: 'Y' },
 };
 
 export const CREDENTIAL_FIELDS: Record<CredentialType, CredentialField[]> = {
@@ -418,6 +458,113 @@ export const CREDENTIAL_FIELDS: Record<CredentialType, CredentialField[]> = {
       helpText: 'Use "Connect with Google" on the Credentials page instead — the same OAuth credential used by Google Sheets/Gmail/Calendar works here since Drive scope is already requested.',
     },
   ],
+  paypal: [
+    { key: 'clientId', label: 'Client ID', fieldType: 'text', required: true, placeholder: 'AZ...' },
+    { key: 'clientSecret', label: 'Client secret', fieldType: 'password', required: true },
+    {
+      key: 'mode',
+      label: 'Mode',
+      fieldType: 'select',
+      required: true,
+      options: [
+        { value: 'sandbox', label: 'Sandbox' },
+        { value: 'live', label: 'Live' },
+      ],
+      helpText: 'From your app in the PayPal Developer Dashboard.',
+    },
+  ],
+  quickbooks: [
+    { key: 'accessToken', label: 'Access token', fieldType: 'password', required: true, helpText: 'Short-lived — reconnect from the Intuit developer OAuth playground if this expires.' },
+    { key: 'realmId', label: 'Realm ID (Company ID)', fieldType: 'text', required: true },
+    {
+      key: 'environment',
+      label: 'Environment',
+      fieldType: 'select',
+      options: [
+        { value: 'sandbox', label: 'Sandbox' },
+        { value: 'production', label: 'Production' },
+      ],
+    },
+  ],
+  xero: [
+    { key: 'accessToken', label: 'Access token', fieldType: 'password', required: true },
+    { key: 'tenantId', label: 'Tenant ID', fieldType: 'text', required: true, helpText: 'From the /connections endpoint after Xero OAuth.' },
+  ],
+  zendesk: [
+    { key: 'subdomain', label: 'Subdomain', fieldType: 'text', required: true, placeholder: 'yourcompany' },
+    { key: 'email', label: 'Account email', fieldType: 'text', required: true },
+    { key: 'apiToken', label: 'API token', fieldType: 'password', required: true, helpText: 'Admin Center → Apps and integrations → APIs → Zendesk API.' },
+  ],
+  mailchimp: [
+    { key: 'apiKey', label: 'API key', fieldType: 'password', required: true, placeholder: 'abc123...-us21', helpText: 'From Account → Extras → API keys. Must include the "-usXX" datacenter suffix.' },
+  ],
+  sendgrid: [
+    { key: 'apiKey', label: 'API key', fieldType: 'password', required: true },
+  ],
+  segment: [
+    { key: 'writeKey', label: 'Write key', fieldType: 'password', required: true, helpText: 'Source settings → API Keys in Segment.' },
+  ],
+  googleAds: [
+    { key: 'accessToken', label: 'Access token', fieldType: 'password', required: true },
+    { key: 'developerToken', label: 'Developer token', fieldType: 'password', required: true },
+    { key: 'customerId', label: 'Customer ID', fieldType: 'text', required: true, placeholder: '1234567890' },
+    { key: 'loginCustomerId', label: 'Login customer ID (MCC)', fieldType: 'text', helpText: 'Only needed when querying via a manager account.' },
+  ],
+  metaAds: [
+    { key: 'accessToken', label: 'Access token', fieldType: 'password', required: true },
+    { key: 'adAccountId', label: 'Ad account ID', fieldType: 'text', required: true, placeholder: 'act_1234567890' },
+  ],
+  amplitude: [
+    { key: 'apiKey', label: 'API key', fieldType: 'password', required: true },
+  ],
+  mixpanel: [
+    { key: 'projectToken', label: 'Project token', fieldType: 'password', required: true },
+  ],
+  calendly: [
+    { key: 'apiToken', label: 'Personal access token', fieldType: 'password', required: true, helpText: 'Calendly → Integrations → API & Webhooks.' },
+  ],
+  docusign: [
+    { key: 'accessToken', label: 'Access token', fieldType: 'password', required: true },
+    { key: 'accountId', label: 'Account ID', fieldType: 'text', required: true },
+    { key: 'basePath', label: 'Base path', fieldType: 'text', placeholder: 'https://demo.docusign.net/restapi', helpText: 'Defaults to the demo/sandbox base — use your production base URI for live use.' },
+  ],
+  elasticsearch: [
+    { key: 'node', label: 'Cluster URL', fieldType: 'text', required: true, placeholder: 'https://my-cluster.es.io:9243' },
+    { key: 'apiKey', label: 'API key', fieldType: 'password', helpText: 'Use this OR username/password below, not both.' },
+    { key: 'username', label: 'Username', fieldType: 'text' },
+    { key: 'password', label: 'Password', fieldType: 'password' },
+  ],
+  sftp: [
+    { key: 'host', label: 'Host', fieldType: 'text', required: true },
+    { key: 'port', label: 'Port', fieldType: 'text', placeholder: '22 (sftp) / 21 (ftp)' },
+    { key: 'username', label: 'Username', fieldType: 'text', required: true },
+    { key: 'password', label: 'Password', fieldType: 'password' },
+    { key: 'privateKey', label: 'Private key (SFTP only)', fieldType: 'password', helpText: 'PEM-format key content, if using key-based auth instead of a password.' },
+  ],
+  linkedin: [
+    { key: 'accessToken', label: 'Access token', fieldType: 'password', required: true },
+    { key: 'authorUrn', label: 'Author URN', fieldType: 'text', required: true, placeholder: 'urn:li:person:xxxx', helpText: 'Fetch once via GET /v2/me, or your organization URN for a company page.' },
+  ],
+  twitter: [
+    { key: 'accessToken', label: 'Access token', fieldType: 'password', required: true, helpText: 'User-context OAuth 2.0 token with tweet.write scope — an app-only bearer token cannot post.' },
+  ],
+  facebook: [
+    { key: 'pageAccessToken', label: 'Page access token', fieldType: 'password', required: true },
+    { key: 'pageId', label: 'Page ID', fieldType: 'text', required: true },
+  ],
+  instagram: [
+    { key: 'pageAccessToken', label: 'Page access token', fieldType: 'password', required: true, helpText: 'Instagram Business publishing rides on a connected Facebook Page token.' },
+    { key: 'igUserId', label: 'Instagram Business user ID', fieldType: 'text', required: true },
+  ],
+  youtube: [
+    {
+      key: 'note',
+      label: '',
+      fieldType: 'info',
+      helpText: 'Use "Connect with Google" on the Credentials page (with YouTube scope granted) instead of pasting a token manually where possible.',
+    },
+    { key: 'accessToken', label: 'Access token', fieldType: 'password', required: true },
+  ],
 };
 
 export function defaultFieldValues(type: CredentialType): Record<string, string> {
@@ -487,4 +634,24 @@ export const NODE_TYPE_TO_CREDENTIAL_TYPE: Record<string, CredentialType> = {
   sentry: 'sentry',
   pagerduty: 'pagerduty',
   datadog: 'datadog',
+  paypal: 'paypal',
+  quickbooks: 'quickbooks',
+  xero: 'xero',
+  zendesk: 'zendesk',
+  mailchimp: 'mailchimp',
+  sendgrid: 'sendgrid',
+  segment: 'segment',
+  googleAds: 'googleAds',
+  metaAds: 'metaAds',
+  amplitude: 'amplitude',
+  mixpanel: 'mixpanel',
+  calendly: 'calendly',
+  docusign: 'docusign',
+  elasticsearch: 'elasticsearch',
+  sftp: 'sftp',
+  linkedin: 'linkedin',
+  twitter: 'twitter',
+  facebook: 'facebook',
+  instagram: 'instagram',
+  youtube: 'youtube',
 };

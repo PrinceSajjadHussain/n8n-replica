@@ -132,6 +132,60 @@ export async function testCredentialConnection(
           await client.end().catch(() => {});
         }
       }
+      case 'sendgrid': {
+        const apiKey = data.apiKey as string | undefined;
+        if (!apiKey) return { ok: false, message: 'No API key stored.' };
+        const res = await fetch('https://api.sendgrid.com/v3/user/account', {
+          headers: { Authorization: `Bearer ${apiKey}` },
+        });
+        return res.ok
+          ? { ok: true, message: 'SendGrid API key is valid.' }
+          : { ok: false, message: `SendGrid rejected the key (${res.status}).` };
+      }
+      case 'mailchimp': {
+        const apiKey = data.apiKey as string | undefined;
+        if (!apiKey) return { ok: false, message: 'No API key stored.' };
+        const dc = apiKey.split('-').pop();
+        if (!dc) return { ok: false, message: 'API key is missing the "-usXX" datacenter suffix.' };
+        const res = await fetch(`https://${dc}.api.mailchimp.com/3.0/ping`, {
+          headers: { Authorization: `Basic ${Buffer.from(`anystring:${apiKey}`).toString('base64')}` },
+        });
+        return res.ok
+          ? { ok: true, message: 'Mailchimp API key is valid.' }
+          : { ok: false, message: `Mailchimp rejected the key (${res.status}).` };
+      }
+      case 'zendesk': {
+        const { subdomain, email, apiToken } = data as { subdomain?: string; email?: string; apiToken?: string };
+        if (!subdomain || !email || !apiToken) return { ok: false, message: 'Subdomain, email, and API token are all required.' };
+        const res = await fetch(`https://${subdomain}.zendesk.com/api/v2/users/me.json`, {
+          headers: { Authorization: `Basic ${Buffer.from(`${email}/token:${apiToken}`).toString('base64')}` },
+        });
+        return res.ok
+          ? { ok: true, message: 'Zendesk credentials are valid.' }
+          : { ok: false, message: `Zendesk rejected the credentials (${res.status}).` };
+      }
+      case 'calendly': {
+        const apiToken = data.apiToken as string | undefined;
+        if (!apiToken) return { ok: false, message: 'No API token stored.' };
+        const res = await fetch('https://api.calendly.com/users/me', { headers: { Authorization: `Bearer ${apiToken}` } });
+        return res.ok
+          ? { ok: true, message: 'Calendly token is valid.' }
+          : { ok: false, message: `Calendly rejected the token (${res.status}).` };
+      }
+      case 'amplitude':
+      case 'mixpanel':
+      case 'segment':
+        return { ok: true, message: 'Key stored. (Analytics ingestion endpoints have no dry-run/identity check — send a test event to verify.)' };
+      case 'elasticsearch': {
+        const node = data.node as string | undefined;
+        if (!node) return { ok: false, message: 'No cluster URL stored.' };
+        const headers: Record<string, string> = {};
+        if (data.apiKey) headers.Authorization = `ApiKey ${data.apiKey}`;
+        const res = await fetch(node, { headers });
+        return res.ok
+          ? { ok: true, message: 'Elasticsearch cluster is reachable.' }
+          : { ok: false, message: `Cluster responded with ${res.status}.` };
+      }
       default:
         return { ok: true, message: 'No automated test is defined for this credential type yet.' };
     }

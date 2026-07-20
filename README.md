@@ -2421,3 +2421,57 @@ Closes the last remaining ⛔ row in **Section C — Data-transformation utility
 Ran `npx tsc --noEmit` in `packages/shared-types` (zero output, zero errors), `apps/worker` (only the pre-existing `moduleResolution=node10` deprecation warning, zero new errors), `apps/api` (same single pre-existing warning), and `apps/web` (zero output, zero errors). The deprecation warning was already present before this round and is not related to any of this round's changes.
 
 Confirmed zero new TypeScript errors across all four workspaces by diffing the tsc output against last round's verified baseline — identical warning set.
+
+## Track 4 utility nodes: Rename Keys, Move Binary Data, Simulate, Debug Helper (this round)
+
+First chunk under the new `flowforge-n8n-full-parity-master-prompt.md` tracker (Track 4 — Core logic/data nodes). Closes four ⛔ rows in one batch, per that document's chunking rule for same-track, low-risk utility nodes.
+
+### What changed
+
+- **`apps/worker/src/nodes/renameKeysNode.ts`** (new, `type: 'renameKeys'`) — bulk-renames fields via a list of `{ from, to }` dot-notation path pairs, using the existing `getByPath`/`setByPath` helpers from `engine/jsonPath.ts` rather than reinventing path traversal. Distinct from `set`: Set adds/overwrites a value at a fixed path, Rename Keys relocates an *existing* value without touching it. `removeOthers` flag lets it double as a field-allowlist/pick operation, matching n8n's own Rename Keys behavior.
+- **`apps/worker/src/nodes/moveBinaryDataNode.ts`** (new, `type: 'moveBinaryData'`) — two-way conversion between an item's binary attachment and its json, using the `getBinary`/`toBinary` context helpers already defined in `types.ts` (same pattern `fileNode.ts` uses). `binaryToJson` supports an optional `parseAsJson` toggle for the common case of a raw JSON body that arrived as a binary buffer (falls back to raw text on parse failure rather than throwing, since a malformed body shouldn't kill the run by default). `jsonToBinary` stringifies non-string values before encoding.
+- **`apps/worker/src/nodes/simulateNode.ts`** (new, `type: 'simulate'`) — fabricates either static JSON output (single object → one item, array → one item per element) or a thrown error, with an optional artificial delay (capped at 30s) for both modes. Leaving the JSON field blank passes input through unchanged, so dropping a Simulate node into a graph as a placeholder is non-destructive by default.
+- **`apps/worker/src/nodes/debugHelperNode.ts`** (new, `type: 'debugHelper'`) — throws one of four canned failure shapes (`generic`, `timeout`, `invalidJson`, `largePayload`) plus a `none` passthrough, so error-handling paths (retry policy, `continueOnFail`, Error Workflow) can be exercised deliberately. Kept deliberately separate from `simulate`/`stopAndError`: Simulate fabricates *data* for building downstream logic, Stop and Error is an authoring-time validation tool with a user-written message, Debug Helper is a test fixture for known *platform* failure shapes.
+- **`apps/worker/src/nodes/index.ts`** — registered all four new modules.
+- **`packages/shared-types/src/index.ts`** — added `'renameKeys' | 'moveBinaryData' | 'simulate' | 'debugHelper'` to the `NodeType` union.
+- **`apps/web/src/lib/nodeTypeMeta.ts`** — palette entries: Rename Keys and Move Binary Data under `Data` (next to the other transform utility nodes), Simulate and Debug Helper under `Logic` (next to NoOp/Stop and Error, since they're control/testing aids rather than data transforms).
+- **`apps/web/src/lib/paramSchemas.ts`** — real config-panel forms for all four: Rename Keys uses the repeatable `array`/`itemFields` pattern (same shape as the existing `mappings` field on the transform node); Move Binary Data uses `visibleIf` to swap the field set based on `mode`; Simulate uses `visibleIf` to hide the JSON editor in error mode and vice versa; Debug Helper uses `visibleIf` to only show the message field for the `generic` failure type.
+- **`apps/web/src/components/NodeIcon.tsx`** — imported and registered three new lucide icons (`FlaskConical`, `Tag`, `PackageOpen`); `Bug` was already imported for an earlier node and is reused for Debug Helper.
+- **`flowforge-n8n-full-parity-master-prompt.md`** — flipped all four Track 4 rows from ☐ to ☑, each pointing back at this section.
+
+### Not done in this pass
+
+- Rename Keys' `removeOthers` mode and nested-path renames haven't been tested against deeply nested source paths where the "old key" cleanup (`delete target[from]`) only strips a *top-level* key when `from` has no dots — a rename from a nested path currently leaves the original nested value in place alongside the new one. Worth a follow-up fix if nested-to-nested renames turn out to be a common case.
+- Move Binary Data doesn't support renaming/copying a binary property without touching JSON (n8n's equivalent has a simpler "just move" path for that) — only the two JSON-conversion directions are implemented here.
+- Debug Helper's `timeout` mode sleeps for a fixed 5s rather than a configurable duration.
+- No dedicated UI treatment beyond the standard config-panel form — these are intentionally low-visual-footprint utility/test nodes, so per the UI bar in the master prompt, the bar here was mainly "consistent with existing Data/Logic nodes," which was checked against `stopAndError`'s and `itemLists`'s existing panels.
+
+### Verified
+
+**Not run this session** — this sandbox has no network access and the repo's `node_modules` aren't installed, so `pnpm install` / `tsc --noEmit` could not actually be executed. Instead, every new file's usage of the shared node context (`items`, `params`, `getBinary`, `toBinary`, `getByPath`, `setByPath`) was manually checked line-by-line against the type signatures in `apps/worker/src/nodes/types.ts` and `apps/worker/src/engine/jsonPath.ts`, and every new `ParamField` entry was checked against the `FieldType`/`ParamField` union in `apps/web/src/lib/paramSchemas.ts`. This is a real gap versus prior rounds' verified `tsc` runs — please run `pnpm install && pnpm -r tsc --noEmit` (or your usual check) before merging, since this pass's "Verified" step is weaker than the convention calls for.
+
+## Output Parsers: Structured + Auto-fixing (this round)
+
+Second chunk under `flowforge-n8n-full-parity-master-prompt.md` (Track 5 — AI & LangChain surface, "Output parsing & reliability" group). Closes two ⛔ rows: Structured Output Parser and Auto-fixing Output Parser.
+
+### What changed
+
+- **`apps/worker/src/nodes/structuredOutputParserNode.ts`** (new, `type: 'structuredOutputParser'`) — parses a text field (or the whole input item) as JSON and optionally checks it against a plain-English field list (reusing the same "name: type" free-text shape Entity Extractor already uses, so users only learn one schema syntax across the AI nodes). Makes **no LLM call** — it's a pure validation/coercion step, distinct from Entity Extractor which calls an LLM to *produce* structured data from prose. Exports `validateAgainstFields` so the auto-fixing node can reuse the exact same check rather than re-implementing it.
+- **`apps/worker/src/nodes/autoFixingOutputParserNode.ts`** (new, `type: 'autoFixingOutputParser'`) — same validation, but on failure calls back into whichever provider is configured (via the existing `resolveMicroNodeApiKey`/`callLlm` helpers from `llmMicroNodeShared.ts`) with the broken text and the specific validation error, asking for a corrected JSON object, up to `maxRetries` times (default 2). Resolves the API key once per node execution rather than per item, so a missing credential fails fast instead of partway through a batch.
+- **`apps/worker/src/nodes/index.ts`** — registered both, placed next to `qaChainNode` in the AI node import block.
+- **`packages/shared-types/src/index.ts`** — added `'structuredOutputParser' | 'autoFixingOutputParser'` to the `NodeType` union.
+- **`apps/web/src/lib/nodeTypeMeta.ts`** — palette entries under `AI`, next to the existing chain nodes.
+- **`apps/web/src/lib/paramSchemas.ts`** — Structured Output Parser's form: `textField`, `expectedFields`, and an `onFailure` enum (fail the run / continue with `null` / continue with raw text kept for inspection). Auto-fixing's form adds the provider/model/maxRetries fields on top, matching the exact provider-enum shape already used by `entityExtractor` and `summarizer`.
+- **`apps/web/src/components/NodeIcon.tsx`** — added `Ruler` (Structured Output Parser) and `Wrench` (Auto-fixing Output Parser) to the lucide-react import and `LUCIDE_ICONS` map.
+- **`flowforge-n8n-full-parity-master-prompt.md`** — flipped both rows to ☑.
+
+### Not done in this pass
+
+- Field-type checking in `validateAgainstFields` is shallow (top-level fields only) — nested object/array shapes aren't recursively validated, only presence and the top-level JS `typeof`. A "name: string, address: object" schema won't check *inside* `address`.
+- Auto-fixing Output Parser retries sequentially per item within a batch (via `Promise.all` over items, each with its own internal while-loop) rather than batching the fix-up calls — fine for typical item counts, but a very large batch with many simultaneous failures will fire many concurrent LLM calls at once with no throttling.
+- No Guardrails node yet (next row in the same "Output parsing & reliability" group) — deliberately left for its own turn since the master prompt flags it as needing a product decision (which policy engine) before starting.
+- Structured Output Parser's `passthroughRaw` failure mode keeps the raw text on the item but doesn't attempt any partial-recovery (e.g. regex-extracting a JSON substring from a longer response) — it's strictly parse-or-don't.
+
+### Verified
+
+Not run this session — same sandbox constraint as the prior round (no network access, `node_modules` not installed, so `pnpm install`/`tsc --noEmit` can't execute here). Manually checked both new files against `apps/worker/src/nodes/types.ts`'s `NodeExecutionContext`/`NodeExecutionResult` shapes and against `llmMicroNodeShared.ts`'s actual exported signatures (`resolveMicroNodeApiKey`, `callLlm`, `tryParseJson`) by reading that file directly rather than assuming its API. Please run the real typecheck before merging.

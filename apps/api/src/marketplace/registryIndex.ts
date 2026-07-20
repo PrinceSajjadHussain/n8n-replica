@@ -34,32 +34,13 @@ export const CURATED_REGISTRY_INDEX: CuratedEntry[] = [
     category: 'Storage',
     verified: true,
   },
-  {
-    name: 'flowforge-node-zendesk',
-    version: '1.0.0',
-    description: 'Create and update Zendesk support tickets.',
-    author: 'community',
-    nodeTypes: ['zendesk'],
-    npmPackage: 'flowforge-node-zendesk',
-    homepage: 'https://www.npmjs.com/package/flowforge-node-zendesk',
-    changelogUrl: 'https://www.npmjs.com/package/flowforge-node-zendesk?activeTab=versions',
-    source: 'npm',
-    category: 'Support',
-    verified: true,
-  },
-  {
-    name: 'flowforge-node-mailchimp',
-    version: '1.0.0',
-    description: 'Manage Mailchimp audiences, tags, and campaigns.',
-    author: 'community',
-    nodeTypes: ['mailchimp'],
-    npmPackage: 'flowforge-node-mailchimp',
-    homepage: 'https://www.npmjs.com/package/flowforge-node-mailchimp',
-    changelogUrl: 'https://www.npmjs.com/package/flowforge-node-mailchimp?activeTab=versions',
-    source: 'npm',
-    category: 'Marketing',
-    verified: true,
-  },
+  // NOTE: 'zendesk' and 'mailchimp' used to be listed here as illustrative
+  // community npm packages (flowforge-node-zendesk / flowforge-node-mailchimp)
+  // that didn't actually exist on npm. Both are now real, first-class core
+  // nodes (apps/worker/src/nodes/financeIntegrations.ts and
+  // marketingIntegrations.ts) registered directly in NODE_REGISTRY, so the
+  // curated marketplace entries were removed to avoid a node type that's
+  // simultaneously "built-in" and "install this fake npm package."
   {
     name: 'flowforge-node-hubspot',
     version: '1.0.0',

@@ -61,6 +61,7 @@ const edgeSchema = z.object({
   source: z.string(),
   target: z.string(),
   sourceHandle: z.string().nullable().optional(),
+  targetHandle: z.string().nullable().optional(),
 });
 const workflowCreateSchema = z.object({
   name: z.string().min(1),

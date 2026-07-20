@@ -257,8 +257,157 @@ export const datadogNode: NodePlugin = {
   },
 };
 
+/**
+ * elasticsearch — index/search documents against Elasticsearch or an
+ * OpenSearch cluster (both speak the same REST wire protocol for the
+ * operations this node needs, so one node covers both — no separate
+ * client library needed, it's a plain REST API over HTTP like httpRequest,
+ * just with auth/index handling baked in).
+ * credential (type 'elasticsearch'): { node: string, apiKey?: string, username?: string, password?: string }
+ *   (node is the cluster URL, e.g. "https://my-cluster.es.io:9243"; use
+ *   either apiKey OR username+password, not both)
+ * params:
+ *   action: 'search' | 'index' | 'delete' (default 'search')
+ *   index: string (required)
+ *   query? (search — full ES query DSL body; defaults to match_all)
+ *   document? (index — document body)
+ *   id? (index — optional explicit doc id; delete — required doc id)
+ */
+export const elasticsearchNode: NodePlugin = {
+  type: 'elasticsearch',
+  async execute({ params, credential }) {
+    const node = credential?.node as string;
+    if (!node) throw new Error('elasticsearch node: requires an "elasticsearch" credential with { "node" }');
+    const index = String(params.index ?? '');
+    if (!index) throw new Error('elasticsearch node: "index" param is required');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const auth = credential?.username
+      ? { username: credential.username as string, password: (credential.password as string) ?? '' }
+      : undefined;
+    if (credential?.apiKey) headers.Authorization = `ApiKey ${credential.apiKey}`;
+    const action = String(params.action ?? 'search');
+    try {
+      if (action === 'search') {
+        const response = await axios.post(`${node}/${index}/_search`, params.query ?? { query: { match_all: {} } }, {
+          headers,
+          auth,
+          timeout: 20000,
+        });
+        return { output: response.data };
+      }
+      if (action === 'index') {
+        const url = params.id ? `${node}/${index}/_doc/${params.id}` : `${node}/${index}/_doc`;
+        const response = await axios.post(url, params.document ?? {}, { headers, auth, timeout: 15000 });
+        return { output: response.data };
+      }
+      if (action === 'delete') {
+        if (!params.id) throw new Error('elasticsearch node: "delete" requires "id"');
+        const response = await axios.delete(`${node}/${index}/_doc/${params.id}`, { headers, auth, timeout: 15000 });
+        return { output: response.data };
+      }
+      throw new Error(`elasticsearch node: unknown action "${action}"`);
+    } catch (err) {
+      throw wrapIntegrationError('elasticsearch', err);
+    }
+  },
+};
+
+/**
+ * sftp — generic SFTP/FTP file transfer node. `protocol` param picks the
+ * wire protocol; both drivers are lazily imported (same rationale as
+ * mongodb/mysql above) so they're only a hard failure if this node is
+ * actually used without the dependency installed.
+ * credential (type 'sftp'): { host: string, port?: number, username: string, password?: string, privateKey?: string }
+ *   (privateKey is SFTP-only; FTP always uses username+password)
+ * params:
+ *   protocol: 'sftp' | 'ftp' (default 'sftp')
+ *   action: 'list' | 'upload' | 'download' | 'delete'
+ *   remotePath: string (required)
+ *   content? (upload — text content to write; for binary payloads pass
+ *     the upstream item's binary through `getBinary`/`toBinary` instead)
+ */
+export const sftpNode: NodePlugin = {
+  type: 'sftp',
+  async execute({ params, credential, toBinary }) {
+    const host = credential?.host as string;
+    const username = credential?.username as string;
+    if (!host || !username) throw new Error('sftp node: requires a "sftp" credential with { "host", "username" }');
+    const remotePath = String(params.remotePath ?? '');
+    if (!remotePath) throw new Error('sftp node: "remotePath" param is required');
+    const protocol = (params.protocol as string) === 'ftp' ? 'ftp' : 'sftp';
+    const action = String(params.action ?? 'list');
+
+    try {
+      if (protocol === 'sftp') {
+        let SftpClient: any;
+        try {
+          SftpClient = (await import('ssh2-sftp-client')).default;
+        } catch {
+          throw new Error('sftp node: the "ssh2-sftp-client" package is not installed — run `npm install ssh2-sftp-client` in apps/worker.');
+        }
+        const client = new SftpClient();
+        try {
+          await client.connect({
+            host,
+            port: Number(credential?.port ?? 22),
+            username,
+            password: credential?.password as string | undefined,
+            privateKey: credential?.privateKey as string | undefined,
+          });
+          if (action === 'list') return { output: await client.list(remotePath) };
+          if (action === 'upload') {
+            const buf = Buffer.from(String(params.content ?? ''), 'utf-8');
+            await client.put(buf, remotePath);
+            return { output: { uploaded: true, remotePath } };
+          }
+          if (action === 'download') {
+            const buf = (await client.get(remotePath)) as Buffer;
+            return { items: [{ json: { remotePath }, binary: { data: toBinary(buf, 'application/octet-stream', remotePath.split('/').pop()) } }] };
+          }
+          if (action === 'delete') {
+            await client.delete(remotePath);
+            return { output: { deleted: true, remotePath } };
+          }
+          throw new Error(`sftp node: unknown action "${action}"`);
+        } finally {
+          await client.end().catch(() => {});
+        }
+      }
+
+      // FTP
+      let ftpClientModule: any;
+      try {
+        ftpClientModule = await import('basic-ftp');
+      } catch {
+        throw new Error('sftp node: the "basic-ftp" package is not installed — run `npm install basic-ftp` in apps/worker.');
+      }
+      const client = new ftpClientModule.Client();
+      try {
+        await client.access({
+          host,
+          port: Number(credential?.port ?? 21),
+          user: username,
+          password: (credential?.password as string) ?? '',
+        });
+        if (action === 'list') return { output: await client.list(remotePath) };
+        if (action === 'delete') {
+          await client.remove(remotePath);
+          return { output: { deleted: true, remotePath } };
+        }
+        throw new Error(`sftp node: action "${action}" over FTP requires a local file path — use "list" or "delete", or switch to protocol "sftp" for buffer-based upload/download`);
+      } finally {
+        client.close();
+      }
+    } catch (err) {
+      throw wrapIntegrationError('sftp', err);
+    }
+  },
+};
+
 registerNode(mongodbNode);
 registerNode(mysqlNode);
 registerNode(sentryNode);
 registerNode(pagerdutyNode);
 registerNode(datadogNode);
+registerNode(elasticsearchNode);
+registerNode(sftpNode);

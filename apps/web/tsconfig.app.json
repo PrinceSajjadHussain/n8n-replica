@@ -30,6 +30,7 @@
     "src/apps/**",
     "src/packages/**",
     "src/services/**",
-    "src/docs/**"
+    "src/docs/**",
+    "src/lib/__tests__/**"
   ]
 }

@@ -10,7 +10,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
-    "seed": "tsx prisma/seed.ts"
+    "seed": "tsx prisma/seed.ts",
+    "backfill:if-switch-handles": "tsx scripts/backfillIfSwitchHandles.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

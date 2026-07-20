@@ -35,6 +35,9 @@ import MobileExecutionMonitorPage from './MobileExecutionMonitorPage';
 import { toast } from '../store/toastStore';
 import PelletEdge from '../components/PelletEdge';
 import ExecutionScrubber, { type ExecutionSummary, type HistoryNodeRun } from '../components/ExecutionScrubber';
+import { getNodePorts, CONNECTION_TYPE_META, NodeConnectionTypes } from '../lib/connectionTypes';
+import { serializeEdgesForSave, deriveEdgesFromSaved } from '../lib/edgeSerialization';
+import { CanvasHandleAddContext, type HandleAddRequest } from '../lib/canvasHandleContext';
 
 const nodeTypes = { flowNode: FlowNode, stickyNote: StickyNoteNode, group: GroupNode };
 const edgeTypes = { default: PelletEdge };
@@ -103,6 +106,26 @@ function CanvasPageDesktop() {
   const [collabOpen, setCollabOpen] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  /** Set when a handle's "+" affordance is clicked — the next node added from
+   *  the palette gets auto-wired to this exact handle instead of dropped bare. */
+  const [pendingHandleRequest, setPendingHandleRequest] = useState<HandleAddRequest | null>(null);
+
+  // Node types that can actually plug into the pending handle: same matching
+  // rule as addNode() below — a "+" clicked on a source (output) handle needs
+  // a new node with a compatible INPUT, a "+" on a target (input) handle
+  // needs a compatible OUTPUT. `undefined` when nothing's pending, which
+  // tells NodePalette to show everything at full opacity as usual.
+  const compatiblePaletteTypes = useMemo(() => {
+    if (!pendingHandleRequest) return undefined;
+    const wantedType = pendingHandleRequest.port.type;
+    const set = new Set<string>();
+    for (const n of NODE_TYPES) {
+      const ports = getNodePorts(n.type);
+      const candidatePorts = pendingHandleRequest.handleType === 'source' ? ports.inputs : ports.outputs;
+      if (candidatePorts.some((p) => p.type === wantedType)) set.add(n.type);
+    }
+    return set;
+  }, [pendingHandleRequest]);
   const [discardOpen, setDiscardOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const socketRef = useRef<Socket | null>(null);
@@ -177,15 +200,8 @@ function CanvasPageDesktop() {
         };
       })
     );
-    setEdges(
-      (wf.edgesJson as any[]).map((e) => ({
-        id: e.id,
-        source: e.source,
-        target: e.target,
-        sourceHandle: e.sourceHandle ?? undefined,
-        animated: false,
-      }))
-    );
+    const nodeTypeById = new Map<string, string | undefined>((wf.nodesJson as any[]).map((n) => [n.id, n.type]));
+    setEdges(deriveEdgesFromSaved(wf.edgesJson as any[], nodeTypeById));
     setSaveState('idle');
   }, [workflowId]);
 
@@ -348,29 +364,126 @@ function CanvasPageDesktop() {
     (changes: EdgeChange[]) => setEdges((eds) => applyEdgeChanges(changes, eds)),
     []
   );
-  const onConnect = useCallback((connection: Connection) => {
-    const id = `e_${Date.now()}`;
-    // Micro-interaction: briefly tag the just-drawn edge so it gets a
-    // glow/thickness pulse (see .edge-connect-pulse in index.css), then
-    // strip the class once the animation has played so it doesn't replay
-    // on every unrelated re-render.
-    setEdges((eds) => addEdge({ ...connection, id, className: 'edge-connect-pulse' }, eds));
-    setTimeout(() => {
-      setEdges((eds) => eds.map((e) => (e.id === id ? { ...e, className: undefined } : e)));
-    }, 600);
-  }, []);
+  /**
+   * Resolves the declared connection type for one side of a would-be edge —
+   * looks up the node's `nodeType` port declarations (connectionTypes.ts) and
+   * finds the specific handle id, falling back to `main` for legacy nodes/
+   * handles that predate the typed-port system.
+   */
+  const resolvePortType = useCallback(
+    (nodeId: string | null | undefined, handleId: string | null | undefined, side: 'source' | 'target') => {
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node) return NodeConnectionTypes.Main;
+      const ports = getNodePorts((node.data as FlowNodeData).nodeType);
+      const list = side === 'source' ? ports.outputs : ports.inputs;
+      const port = handleId ? list.find((p) => p.id === handleId) : list[0];
+      return port?.type ?? NodeConnectionTypes.Main;
+    },
+    [nodes]
+  );
+
+  /**
+   * Enforces n8n's connection-type contract: a source output can only wire
+   * into a target input of the SAME connection type (an `ai_tool` output
+   * can't plug into an `ai_memory` input, etc.), and non-main handles with a
+   * `maxConnections` cap (e.g. an Agent's single Model slot) reject further
+   * drags once full.
+   */
+  const isValidConnection = useCallback(
+    (connection: Connection | Edge) => {
+      const c = connection as Connection;
+      if (c.source === c.target) return false;
+      const sourceType = resolvePortType(c.source, c.sourceHandle, 'source');
+      const targetType = resolvePortType(c.target, c.targetHandle, 'target');
+      if (sourceType !== targetType) return false;
+
+      const targetNode = nodes.find((n) => n.id === c.target);
+      if (targetNode) {
+        const ports = getNodePorts((targetNode.data as FlowNodeData).nodeType);
+        const targetPort = ports.inputs.find((p) => p.id === c.targetHandle) ?? ports.inputs[0];
+        if (targetPort?.maxConnections) {
+          const handleKey = c.targetHandle ?? ports.inputs[0]?.id;
+          const existing = edges.filter((e) => e.target === c.target && (e.targetHandle ?? ports.inputs[0]?.id) === handleKey).length;
+          if (existing >= targetPort.maxConnections) return false;
+        }
+      }
+      return true;
+    },
+    [nodes, edges, resolvePortType]
+  );
+
+  const onConnect = useCallback(
+    (connection: Connection) => {
+      const id = `e_${Date.now()}`;
+      const connectionType = resolvePortType(connection.source, connection.sourceHandle, 'source');
+      const isMain = connectionType === NodeConnectionTypes.Main;
+      const meta = CONNECTION_TYPE_META[connectionType];
+      // Non-main (AI) wires get the connection type's color + a dashed
+      // stroke so a Model/Memory/Tool wire reads visually distinct from the
+      // main execution pipe, mirroring n8n's canvas.
+      const edgeStyle = isMain ? undefined : { stroke: meta.color, strokeDasharray: '4 3', strokeWidth: 1.5 };
+      // Micro-interaction: briefly tag the just-drawn edge so it gets a
+      // glow/thickness pulse (see .edge-connect-pulse in index.css), then
+      // strip the class once the animation has played so it doesn't replay
+      // on every unrelated re-render.
+      setEdges((eds) =>
+        addEdge({ ...connection, id, className: 'edge-connect-pulse', style: edgeStyle, data: { connectionType } }, eds)
+      );
+      setTimeout(() => {
+        setEdges((eds) => eds.map((e) => (e.id === id ? { ...e, className: undefined } : e)));
+      }, 600);
+    },
+    [resolvePortType]
+  );
 
   function addNode(nodeType: string, label: string) {
     const id = nextId();
+    const pending = pendingHandleRequest;
+
+    // Wiring from a handle's "+": drop the new node offset from the node the
+    // request came from, then connect it to the exact handle that was
+    // clicked (only if the new node type actually offers a compatible port
+    // for that connection type — otherwise it's just added bare, same as
+    // a normal palette pick).
+    let position = { x: 120 + nodes.length * 40, y: 120 + nodes.length * 30 };
+    if (pending) {
+      const originNode = nodes.find((n) => n.id === pending.nodeId);
+      if (originNode) {
+        position =
+          pending.handleType === 'source'
+            ? { x: originNode.position.x + 280, y: originNode.position.y }
+            : { x: originNode.position.x, y: originNode.position.y + 160 };
+      }
+    }
+
     setNodes((nds) => [
       ...nds,
       {
         id,
         type: 'flowNode',
-        position: { x: 120 + nds.length * 40, y: 120 + nds.length * 30 },
+        position,
         data: { label, nodeType, status: 'idle', params: {}, credentialId: null },
       },
     ]);
+
+    if (pending) {
+      const newPorts = getNodePorts(nodeType);
+      // The new node's matching port is on the OPPOSITE side of the pending
+      // request: clicking a "+" on an output looks for an input of the same
+      // type on the new node (and vice versa).
+      const matchList = pending.handleType === 'source' ? newPorts.inputs : newPorts.outputs;
+      const matchPort = matchList.find((p) => p.type === pending.port.type);
+      if (matchPort) {
+        const connection: Connection =
+          pending.handleType === 'source'
+            ? { source: pending.nodeId, sourceHandle: pending.port.id, target: id, targetHandle: matchPort.id }
+            : { source: id, sourceHandle: matchPort.id, target: pending.nodeId, targetHandle: pending.port.id };
+        // Defer one tick so the node exists in `nodes` before onConnect's
+        // resolvePortType looks it up.
+        setTimeout(() => onConnect(connection), 0);
+      }
+      setPendingHandleRequest(null);
+    }
   }
 
   /** Adds a freeform sticky note (UI-only annotation, not a real workflow
@@ -622,12 +735,7 @@ function CanvasPageDesktop() {
         extent: n.extent === 'parent' ? ('parent' as const) : null,
       };
     });
-    const edgesPayload = edges.map((e) => ({
-      id: e.id,
-      source: e.source,
-      target: e.target,
-      sourceHandle: e.sourceHandle ?? null,
-    }));
+    const edgesPayload = serializeEdgesForSave(edges);
     try {
       await api.put(`/workflows/${workflowId}`, { name, nodes: nodesPayload, edges: edgesPayload });
       await api.post(`/workflows/${workflowId}/versions`, { nodesJson: nodesPayload, edgesJson: edgesPayload });
@@ -952,19 +1060,41 @@ function CanvasPageDesktop() {
       </header>
 
       <div className="flex-1 flex min-h-0">
-        <NodePalette onAdd={addNode} />
+        <div className="flex flex-col">
+          {pendingHandleRequest && (
+            <div className="flex items-center gap-2 px-3 py-2 text-xs border-b border-panelBorder bg-panel">
+              <span style={{ color: CONNECTION_TYPE_META[pendingHandleRequest.port.type].color }}>●</span>
+              <span className="text-muted">
+                Pick a node to plug into{' '}
+                <strong className="text-ink">
+                  {pendingHandleRequest.port.label || CONNECTION_TYPE_META[pendingHandleRequest.port.type].label || 'this'}
+                </strong>
+              </span>
+              <button
+                className="focus-ring ml-auto text-muted hover:text-ink"
+                onClick={() => setPendingHandleRequest(null)}
+                title="Cancel"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+          <NodePalette onAdd={addNode} compatibleTypes={compatiblePaletteTypes} />
+        </div>
         <div className="flex-1 min-w-0 relative" ref={canvasWrapperRef} onMouseMove={handleCanvasMouseMove}>
           {historyOpen && workflowId && (
             <ExecutionScrubber workflowId={workflowId} onReplay={handleReplay} onExit={exitReplay} />
           )}
           <NodeDensityContext.Provider value={density}>
           <CredentialNamesContext.Provider value={credentialNames}>
+          <CanvasHandleAddContext.Provider value={setPendingHandleRequest}>
           <ReactFlow
             nodes={displayNodes}
             edges={edges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
+            isValidConnection={isValidConnection}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
             onNodeClick={(_, node) => setSelectedNodeId(node.id)}
@@ -976,6 +1106,7 @@ function CanvasPageDesktop() {
             <Controls />
             <MiniMap pannable zoomable />
           </ReactFlow>
+          </CanvasHandleAddContext.Provider>
           </CredentialNamesContext.Provider>
           </NodeDensityContext.Provider>
           {Object.entries(remoteCursors).map(([uid, c]) => (

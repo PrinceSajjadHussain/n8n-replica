@@ -236,6 +236,63 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
     ],
   },
 
+  structuredOutputParser: {
+    fields: [
+      { key: 'textField', label: 'Text field (dot-notation, optional)', type: 'string', placeholder: 'response', help: 'Leave blank to parse the whole input item.' },
+      {
+        key: 'expectedFields',
+        label: 'Expected fields',
+        type: 'text',
+        placeholder: 'name: string, total: number, isUrgent: boolean',
+        help: 'Same plain-English shape as Entity Extractor. Leave blank to only check the text is valid JSON, without checking specific fields.',
+      },
+      {
+        key: 'onFailure',
+        label: 'On invalid/mismatched JSON',
+        type: 'enum',
+        default: 'error',
+        options: [
+          { value: 'error', label: 'Fail the run' },
+          { value: 'null', label: 'Continue with parsed: null' },
+          { value: 'passthroughRaw', label: 'Continue, keep raw text for inspection' },
+        ],
+      },
+    ],
+  },
+
+  autoFixingOutputParser: {
+    fields: [
+      { key: 'textField', label: 'Text field (dot-notation, optional)', type: 'string', placeholder: 'response', help: 'Leave blank to parse the whole input item.' },
+      {
+        key: 'expectedFields',
+        label: 'Expected fields',
+        type: 'text',
+        placeholder: 'name: string, total: number, isUrgent: boolean',
+        help: 'Sent back to the model as part of the fix-up prompt on retry, so be specific.',
+      },
+      {
+        key: 'provider', label: 'Fix-up provider', type: 'enum', default: 'openai',
+        options: [
+          { value: 'openai', label: 'OpenAI' },
+          { value: 'anthropic', label: 'Anthropic' },
+          { value: 'gemini', label: 'Gemini' },
+        ],
+      },
+      { key: 'model', label: 'Model (optional — provider default if blank)', type: 'string' },
+      { key: 'maxRetries', label: 'Max fix-up attempts', type: 'number', default: 2, min: 0, max: 5 },
+      {
+        key: 'onFailure',
+        label: 'If still invalid after retries',
+        type: 'enum',
+        default: 'error',
+        options: [
+          { value: 'error', label: 'Fail the run' },
+          { value: 'null', label: 'Continue with parsed: null' },
+        ],
+      },
+    ],
+  },
+
   summarizer: {
     fields: [
       {
@@ -834,6 +891,79 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
     fields: [
       { key: 'message', label: 'Error message', type: 'string', placeholder: 'Order total cannot be negative' },
       { key: 'messageField', label: 'Or read message from field (optional)', type: 'string', placeholder: 'validationError', help: 'Dot-notation path into the input item. Overrides the static message above when set.' },
+    ],
+  },
+
+  renameKeys: {
+    fields: [
+      {
+        key: 'mappings',
+        label: 'Rename',
+        type: 'array',
+        itemLabel: 'mapping',
+        itemFields: [
+          { key: 'from', label: 'From (dot-notation path)', type: 'string', placeholder: 'customer.fullName' },
+          { key: 'to', label: 'To (dot-notation path)', type: 'string', placeholder: 'customerName' },
+        ],
+      },
+      { key: 'removeOthers', label: 'Output only the renamed fields', type: 'boolean', default: false, help: 'When off, every other field passes through unchanged.' },
+    ],
+  },
+
+  moveBinaryData: {
+    fields: [
+      {
+        key: 'mode',
+        label: 'Direction',
+        type: 'enum',
+        default: 'binaryToJson',
+        options: [
+          { value: 'binaryToJson', label: 'Binary → JSON' },
+          { value: 'jsonToBinary', label: 'JSON → Binary' },
+        ],
+      },
+      { key: 'binaryProperty', label: 'Binary property name', type: 'string', default: 'data', placeholder: 'data' },
+      { key: 'jsonField', label: 'JSON field (dot-notation)', type: 'string', default: 'data', placeholder: 'data' },
+      { key: 'parseAsJson', label: 'Parse decoded text as JSON', type: 'boolean', default: false, visibleIf: (p) => p.mode !== 'jsonToBinary', help: 'Binary → JSON only. Off = write base64 text; on = JSON.parse the decoded bytes (falls back to text on parse failure).' },
+      { key: 'mimeType', label: 'MIME type', type: 'string', default: 'application/octet-stream', visibleIf: (p) => p.mode === 'jsonToBinary' },
+      { key: 'fileName', label: 'File name (optional)', type: 'string', visibleIf: (p) => p.mode === 'jsonToBinary' },
+    ],
+  },
+
+  simulate: {
+    fields: [
+      {
+        key: 'mode',
+        label: 'Mode',
+        type: 'enum',
+        default: 'data',
+        options: [
+          { value: 'data', label: 'Fabricate data' },
+          { value: 'error', label: 'Fabricate an error' },
+        ],
+      },
+      { key: 'jsonData', label: 'Fabricated JSON (object or array)', type: 'json', rows: 6, visibleIf: (p) => p.mode !== 'error', help: 'Leave blank to pass input through unchanged.' },
+      { key: 'errorMessage', label: 'Error message', type: 'string', placeholder: 'Simulated failure', visibleIf: (p) => p.mode === 'error' },
+      { key: 'simulatedDelayMs', label: 'Simulated delay (ms, optional)', type: 'number', min: 0, max: 30000, default: 0 },
+    ],
+  },
+
+  debugHelper: {
+    fields: [
+      {
+        key: 'errorType',
+        label: 'Failure to simulate',
+        type: 'enum',
+        default: 'generic',
+        options: [
+          { value: 'generic', label: 'Generic error' },
+          { value: 'timeout', label: 'Timeout (5s hang, then fails)' },
+          { value: 'invalidJson', label: 'Invalid JSON response' },
+          { value: 'largePayload', label: 'Oversized payload (~5MB)' },
+          { value: 'none', label: 'None — pass through' },
+        ],
+      },
+      { key: 'message', label: 'Message (generic only)', type: 'string', placeholder: 'Simulated generic failure', visibleIf: (p) => p.errorType === 'generic' },
     ],
   },
 

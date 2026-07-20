@@ -44,12 +44,22 @@ function pushRecentlyUsed(type: string) {
 }
 
 /** A single colored icon tile, reused for both the grid and the recently-used row. */
-function NodeTile({ node, onAdd }: { node: NodeTypeMeta; onAdd: (node: NodeTypeMeta) => void }) {
+function NodeTile({
+  node,
+  onAdd,
+  dimmed,
+}: {
+  node: NodeTypeMeta;
+  onAdd: (node: NodeTypeMeta) => void;
+  dimmed?: boolean;
+}) {
   return (
     <button
       onClick={() => onAdd(node)}
-      title={node.label}
-      className="focus-ring group flex flex-col items-center gap-1.5 p-2 rounded-lg hover:bg-canvas transition text-center"
+      title={dimmed ? `${node.label} — doesn't have a matching port for this connection` : node.label}
+      className={`focus-ring group flex flex-col items-center gap-1.5 p-2 rounded-lg hover:bg-canvas transition text-center ${
+        dimmed ? 'opacity-35 grayscale hover:opacity-70 hover:grayscale-0' : ''
+      }`}
     >
       <span
         className="w-9 h-9 rounded-lg flex items-center justify-center leading-none shadow-sm group-hover:scale-105 transition-transform"
@@ -62,7 +72,19 @@ function NodeTile({ node, onAdd }: { node: NodeTypeMeta; onAdd: (node: NodeTypeM
   );
 }
 
-export default function NodePalette({ onAdd }: { onAdd: (type: string, label: string) => void }) {
+export default function NodePalette({
+  onAdd,
+  compatibleTypes,
+}: {
+  onAdd: (type: string, label: string) => void;
+  /**
+   * When set (a pending handle-add request is active), node types NOT in
+   * this set are dimmed rather than hidden — the user can still add them
+   * bare, but the useful matches are visually obvious. `undefined` means no
+   * filter is active (normal palette browsing).
+   */
+  compatibleTypes?: Set<string>;
+}) {
   const [query, setQuery] = useState('');
   const [recentTypes, setRecentTypes] = useState<string[]>([]);
 
@@ -113,7 +135,12 @@ export default function NodePalette({ onAdd }: { onAdd: (type: string, label: st
             <p className="text-[10px] uppercase text-muted px-1 mb-1.5">Recently used</p>
             <div className="grid grid-cols-3 gap-0.5">
               {recentNodes.map((n) => (
-                <NodeTile key={`recent-${n.type}`} node={n} onAdd={handleAdd} />
+                <NodeTile
+                  key={`recent-${n.type}`}
+                  node={n}
+                  onAdd={handleAdd}
+                  dimmed={compatibleTypes ? !compatibleTypes.has(n.type) : false}
+                />
               ))}
             </div>
           </div>
@@ -130,8 +157,18 @@ export default function NodePalette({ onAdd }: { onAdd: (type: string, label: st
             <div className="grid grid-cols-3 gap-0.5">
               {filteredNodes
                 .filter((n) => n.category === cat)
+                .slice()
+                .sort((a, b) => {
+                  if (!compatibleTypes) return 0;
+                  return Number(compatibleTypes.has(b.type)) - Number(compatibleTypes.has(a.type));
+                })
                 .map((n) => (
-                  <NodeTile key={n.type} node={n} onAdd={handleAdd} />
+                  <NodeTile
+                    key={n.type}
+                    node={n}
+                    onAdd={handleAdd}
+                    dimmed={compatibleTypes ? !compatibleTypes.has(n.type) : false}
+                  />
                 ))}
             </div>
           </div>

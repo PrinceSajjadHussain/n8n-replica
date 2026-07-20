@@ -130,7 +130,7 @@ function FolderRow({
 }
 
 export default function FolderTree(props: FolderTreeProps) {
-  const { nodes, selectedFolderId, onSelect, onCreateChild, onDropWorkflow, counts } = props;
+  const { nodes, selectedFolderId, onSelect, onCreateChild, onDropWorkflow } = props;
   const [rootDragOver, setRootDragOver] = useState(false);
 
   return (

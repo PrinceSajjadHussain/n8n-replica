@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check:edge-roundtrip": "tsx src/lib/__tests__/edgeRoundTrip.check.ts"
   },
   "dependencies": {
     "@flowforge/shared-types": "*",
@@ -37,6 +38,7 @@
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.13",
     "typescript": "~6.0.2",
-    "vite": "^8.1.1"
+    "vite": "^8.1.1",
+    "tsx": "^4.16.5"
   }
 }

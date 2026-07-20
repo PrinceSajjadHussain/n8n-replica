@@ -38,6 +38,11 @@ import {
   FileText,
   MessageCircleQuestion,
   List,
+  FlaskConical,
+  Tag,
+  PackageOpen,
+  Ruler,
+  Wrench,
   type LucideIcon,
 } from 'lucide-react';
 import {
@@ -108,6 +113,11 @@ const LUCIDE_ICONS: Record<string, LucideIcon> = {
   FileText,
   MessageCircleQuestion,
   List,
+  FlaskConical,
+  Tag,
+  PackageOpen,
+  Ruler,
+  Wrench,
 };
 
 /** Branded service marks, keyed by the `si:<name>` half of `iconKey`. CC0 via `simple-icons`. */
