@@ -97,6 +97,8 @@ export type StatusEmitter = (event: {
   itemCount?: number;
   /** Expressions in this node's params that failed to evaluate (typed, per Fix 4) — surfaced in the UI instead of silently resolving to undefined. */
   expressionErrors?: { param: string; message: string; type: ExpressionErrorType }[];
+  /** Binary metadata/preview for this node's output items, when present (see itemsToBinaryPreview/itemsToBinarySummary). */
+  binary?: unknown;
 }) => void;
 
 type NodeStatus = 'success' | 'failed' | 'skipped';

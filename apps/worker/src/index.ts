@@ -43,6 +43,14 @@ const worker = new Worker<QueueJobData>(
         credential,
         getBinary: (item, key) => decodeBinary(item, key),
         toBinary: (buffer, mimeType, fileName) => makeBinary(buffer, mimeType, fileName),
+        // Single-node "test" runs happen outside any real workflow execution,
+        // so there's no workflow/workspace to scope Data Table lookups or
+        // static data to. Safe no-op defaults — plugins that need real
+        // static-data persistence should be run as part of a workflow.
+        workflowId: '',
+        workspaceId: null,
+        staticData: {},
+        setStaticData: async () => {},
       });
       return result;
     }

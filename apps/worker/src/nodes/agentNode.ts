@@ -191,7 +191,11 @@ export interface AgentToolSpec {
   staticParams?: Record<string, unknown>; // params always merged in (e.g. fixed channel)
 }
 
-async function runTool(spec: AgentToolSpec, modelArgs: Record<string, unknown>) {
+async function runTool(
+  spec: AgentToolSpec,
+  modelArgs: Record<string, unknown>,
+  outer: Pick<NodeExecutionContext, 'workflowId' | 'workspaceId' | 'staticData' | 'setStaticData'>
+) {
   const node = NODE_REGISTRY[spec.nodeType];
   if (!node) throw new Error(`agent tool "${spec.name}": node type "${spec.nodeType}" is not registered`);
   const ctx: NodeExecutionContext = {
@@ -206,6 +210,10 @@ async function runTool(spec: AgentToolSpec, modelArgs: Record<string, unknown>) 
       fileSize: buffer.length,
       data: buffer.toString('base64'),
     }),
+    workflowId: outer.workflowId,
+    workspaceId: outer.workspaceId,
+    staticData: outer.staticData,
+    setStaticData: outer.setStaticData,
   };
   const result = await node.execute(ctx);
   return result.output ?? result.items ?? null;
@@ -235,7 +243,7 @@ async function runTool(spec: AgentToolSpec, modelArgs: Record<string, unknown>) 
  */
 export const agentNode: NodePlugin = {
   type: 'agent',
-  async execute({ params, credential }) {
+  async execute({ params, credential, workflowId, workspaceId, staticData, setStaticData }) {
     const apiKey = (credential?.apiKey as string) ?? process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error('agent node: requires an "openai" credential with { "apiKey": "sk-..." }');
 
@@ -312,7 +320,9 @@ export const agentNode: NodePlugin = {
         let toolResult: unknown;
         try {
           const args = JSON.parse(call.function.arguments || '{}');
-          toolResult = spec ? await runTool(spec, args) : { error: `unknown tool ${call.function.name}` };
+          toolResult = spec
+            ? await runTool(spec, args, { workflowId, workspaceId, staticData, setStaticData })
+            : { error: `unknown tool ${call.function.name}` };
         } catch (err) {
           toolResult = { error: err instanceof Error ? err.message : String(err) };
         }
@@ -363,7 +373,7 @@ export const agentNode: NodePlugin = {
  */
 export const agentOrchestratorNode: NodePlugin = {
   type: 'agentOrchestrator',
-  async execute({ params, credential }) {
+  async execute({ params, credential, workflowId, workspaceId, staticData, setStaticData }) {
     const sessionId = String(params.sessionId ?? `orchestrator-${Date.now()}`);
     const model = String(params.model ?? 'gpt-4o-mini');
     const goal = String(params.goal ?? '');
@@ -382,6 +392,10 @@ export const agentOrchestratorNode: NodePlugin = {
           data: buffer.toString('base64'),
         }),
         params: { sessionId, model, systemPrompt, prompt, tools, maxSteps: 6 },
+        workflowId,
+        workspaceId,
+        staticData,
+        setStaticData,
       });
 
     // 1. Planner: break the goal into subtasks routed to named sub-agents.

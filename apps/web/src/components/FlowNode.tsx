@@ -38,6 +38,8 @@ export interface FlowNodeData {
   lastRunInput?: unknown;
   lastRunOutput?: unknown;
   lastRunError?: string;
+  /** Per-param expression evaluation errors from the most recent run (Fix 4) — surfaced instead of silently blank values. */
+  lastRunExpressionErrors?: { param: string; message: string; type: string }[];
   lastRunDurationMs?: number;
   lastRunItemCount?: number;
   /** Binary attachment metadata (+ inline preview for small images/PDFs) from the most recent run — see executor.ts's itemsToBinaryPreview. */
@@ -161,6 +163,7 @@ export default function FlowNode({ id, data, selected }: { id: string; data: Flo
               durationMs: data.lastRunDurationMs,
               itemCount: data.lastRunItemCount,
               binary: data.lastRunBinary,
+              expressionErrors: data.lastRunExpressionErrors,
             }}
             onClose={() => setInspectOpen(false)}
           />

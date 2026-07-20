@@ -253,6 +253,7 @@ function CanvasPageDesktop() {
             lastRunDurationMs: undefined,
             lastRunItemCount: undefined,
             lastRunBinary: undefined,
+            lastRunExpressionErrors: undefined,
           },
         }))
       );
@@ -271,6 +272,7 @@ function CanvasPageDesktop() {
         lastRunItemCount: e.itemCount,
         lastRunError: undefined,
         lastRunBinary: e.binary,
+        lastRunExpressionErrors: e.expressionErrors,
       });
       setEdgesActive(e.nodeId, false);
     });

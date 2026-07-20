@@ -67,7 +67,11 @@ workflowTestsRouter.post('/:id/tests', async (req: AuthedRequest, res: Response,
     await assertOwnership(req.params.id, req.userId!);
     const parsed = testCaseSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-    const testCase = await createWorkflowTestCase(req.params.id, parsed.data);
+    const testCase = await createWorkflowTestCase(req.params.id, {
+      ...parsed.data,
+      input: parsed.data.input ?? {},
+      expectedOutput: parsed.data.expectedOutput ?? {},
+    });
     res.status(201).json({ testCase });
   } catch (err) {
     next(err);

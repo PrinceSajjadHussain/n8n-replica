@@ -2,6 +2,7 @@ import { pool } from './pool';
 import { randomUUID } from 'crypto';
 import { decrypt } from './crypto';
 import { redactForPersistence } from '../utils/redact';
+import type { ExecutionJobData } from '@flowforge/shared-types';
 
 export interface WorkflowRow {
   id: string;
@@ -60,7 +61,7 @@ export async function getVariablesMapForWorkflow(workflowId: string): Promise<Re
 
 export async function createExecution(
   workflowId: string,
-  triggerType: 'manual' | 'webhook' | 'chatTrigger' | 'schedule' | 'emailTrigger' | 'fileWatcher' | 'databaseChange' | 'streamTrigger',
+  triggerType: ExecutionJobData['triggerType'],
   presetId?: string
 ): Promise<string> {
   const id = presetId ?? randomUUID();

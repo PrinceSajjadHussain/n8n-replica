@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 export interface NodeRunSnapshot {
-  status: 'running' | 'success' | 'failed' | 'skipped' | 'idle';
+  status: 'running' | 'success' | 'failed' | 'skipped' | 'idle' | 'paused';
   input?: unknown;
   output?: unknown;
   error?: string;
@@ -9,6 +9,8 @@ export interface NodeRunSnapshot {
   itemCount?: number;
   /** Binary attachment metadata (+ inline base64 `preview` for small image/PDF files), keyed by binary property name — see executor.ts's itemsToBinaryPreview. */
   binary?: unknown;
+  /** Per-param expression evaluation errors from this run (Fix 4) — surfaced instead of silently blank values. */
+  expressionErrors?: { param: string; message: string; type: string }[];
 }
 
 interface BinaryEntry {
@@ -168,7 +170,7 @@ export default function NodeInspectPopover({
             {snapshot.itemCount} item{snapshot.itemCount === 1 ? '' : 's'}
           </span>
         )}
-        <span className={snapshot.status === 'failed' ? 'text-alert' : snapshot.status === 'running' ? 'text-amber' : 'text-signal'}>
+        <span className={snapshot.status === 'failed' ? 'text-alert' : snapshot.status === 'running' || snapshot.status === 'paused' ? 'text-amber' : 'text-signal'}>
           {snapshot.status}
         </span>
       </div>
@@ -220,6 +222,21 @@ export default function NodeInspectPopover({
           <pre className="h-full overflow-auto text-[11px] leading-snug whitespace-pre-wrap break-words bg-canvas border border-panelBorder rounded-md p-2 pr-14">
             {formatJson(body)}
           </pre>
+        </div>
+      )}
+      {snapshot.expressionErrors && snapshot.expressionErrors.length > 0 && (
+        <div className="mx-3 mb-3 rounded-md border border-alert/40 bg-alert/5 px-2 py-1.5">
+          <p className="text-[10px] font-medium text-alert mb-1">
+            {snapshot.expressionErrors.length} expression error{snapshot.expressionErrors.length === 1 ? '' : 's'}
+          </p>
+          <ul className="space-y-1">
+            {snapshot.expressionErrors.map((e, i) => (
+              <li key={i} className="text-[10px] text-alert/90 leading-snug">
+                <span className="font-mono">{e.param || '(root)'}</span> — {e.message}{' '}
+                <span className="text-alert/60">[{e.type}]</span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </div>

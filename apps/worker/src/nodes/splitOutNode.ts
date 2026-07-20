@@ -38,7 +38,8 @@ export const splitOutNode: NodePlugin = {
           cursor = cursor[keys[k]] as Record<string, unknown>;
         }
         cursor[keys[keys.length - 1]] = el;
-        out.push({ json, binary: item.binary, pairedItem: { item: i, sourceNode: item.pairedItem?.sourceNode } });
+        const sourceNode = Array.isArray(item.pairedItem) ? undefined : item.pairedItem?.sourceNode;
+        out.push({ json, binary: item.binary, pairedItem: { item: i, sourceNode } });
       });
     });
 
