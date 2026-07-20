@@ -39,6 +39,7 @@ import { getNodePorts, CONNECTION_TYPE_META, NodeConnectionTypes } from '../lib/
 import { serializeEdgesForSave, deriveEdgesFromSaved } from '../lib/edgeSerialization';
 import { CanvasHandleAddContext, type HandleAddRequest } from '../lib/canvasHandleContext';
 import { NodeRetryContext } from '../lib/nodeRetryContext';
+import { getDefaultParams } from '../lib/nodeDefaults';
 
 const nodeTypes = { flowNode: FlowNode, stickyNote: StickyNoteNode, group: GroupNode };
 const edgeTypes = { default: PelletEdge };
@@ -511,7 +512,7 @@ function CanvasPageDesktop() {
         id,
         type: 'flowNode',
         position,
-        data: { label: uniqueLabelValue, nodeType, status: 'idle', params: {}, credentialId: null },
+        data: { label: uniqueLabelValue, nodeType, status: 'idle', params: getDefaultParams(nodeType), credentialId: null },
       },
     ]);
 

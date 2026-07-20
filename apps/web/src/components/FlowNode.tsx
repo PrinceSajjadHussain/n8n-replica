@@ -149,7 +149,7 @@ export default function FlowNode({ id, data, selected }: { id: string; data: Flo
       <div
         className={`relative rounded-lg bg-panel border border-panelBorder ring-2 ${ring} ${
           isCompact ? 'px-2 py-1.5' : 'px-3 py-2'
-        } shadow-sm hover:shadow-lg hover:-translate-y-px transition-[box-shadow,transform] ${
+        } shadow-sm hover:shadow-xl hover:shadow-signal/10 hover:-translate-y-0.5 hover:border-signal/50 transition-[box-shadow,transform,border-color] duration-150 ease-out ${
           selected ? 'outline outline-1 outline-signal' : ''
         }`}
         style={widthStyle}

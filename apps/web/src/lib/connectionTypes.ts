@@ -135,7 +135,11 @@ const PORTS_BY_NODE_TYPE: Record<string, NodePorts> = {
       { id: 'tool', type: NodeConnectionTypes.AiTool },
       { id: 'outputParser', type: NodeConnectionTypes.AiOutputParser, maxConnections: 1 },
     ],
-    outputs: [MAIN_OUT],
+    // An Agent node can run standalone (main-in -> main-out), but it can
+    // also plug into a Multi-Agent Orchestrator's "agent" sub-input, so it
+    // needs to expose an ai_agent-typed output too — otherwise nothing in
+    // the palette is ever compatible with that handle.
+    outputs: [MAIN_OUT, { id: 'agent-out', type: NodeConnectionTypes.AiAgent, label: 'agent' }],
   },
   agentOrchestrator: {
     inputs: [

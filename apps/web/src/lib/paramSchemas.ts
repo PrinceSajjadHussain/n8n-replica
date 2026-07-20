@@ -1071,6 +1071,731 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
       },
     ],
   },
+
+  linkedin: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'createPost',
+        options: [
+          { value: 'createPost', label: 'Create post' },
+          { value: 'getProfile', label: 'Get my profile' },
+        ],
+      },
+      {
+        key: 'text',
+        label: 'Post text',
+        type: 'expression',
+        placeholder: 'Excited to share...',
+        visibleIf: (p) => (p.action ?? 'createPost') === 'createPost',
+      },
+      {
+        key: 'visibility',
+        label: 'Visibility',
+        type: 'enum',
+        default: 'PUBLIC',
+        options: [
+          { value: 'PUBLIC', label: 'Public' },
+          { value: 'CONNECTIONS', label: 'Connections only' },
+        ],
+        visibleIf: (p) => (p.action ?? 'createPost') === 'createPost',
+      },
+    ],
+  },
+
+  twitter: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'createTweet',
+        options: [
+          { value: 'createTweet', label: 'Create tweet' },
+          { value: 'getUser', label: 'Get user' },
+        ],
+      },
+      {
+        key: 'text',
+        label: 'Tweet text',
+        type: 'expression',
+        placeholder: "What's happening?",
+        visibleIf: (p) => (p.action ?? 'createTweet') === 'createTweet',
+      },
+      {
+        key: 'username',
+        label: 'Username (optional)',
+        type: 'string',
+        placeholder: 'jack',
+        help: 'Leave blank to look up the authenticated user.',
+        visibleIf: (p) => p.action === 'getUser',
+      },
+    ],
+  },
+
+  facebook: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'createPost',
+        options: [{ value: 'createPost', label: 'Create post' }],
+      },
+      { key: 'message', label: 'Message', type: 'expression', placeholder: 'Big news!' },
+      { key: 'link', label: 'Link (optional)', type: 'string', placeholder: 'https://example.com' },
+    ],
+  },
+
+  instagram: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'createPost',
+        options: [{ value: 'createPost', label: 'Create post' }],
+      },
+      { key: 'imageUrl', label: 'Image URL', type: 'string', placeholder: 'https://example.com/image.jpg' },
+      { key: 'caption', label: 'Caption', type: 'expression', placeholder: 'Caption goes here...' },
+    ],
+  },
+
+  trello: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'createCard',
+        options: [
+          { value: 'createCard', label: 'Create card' },
+          { value: 'getCard', label: 'Get card' },
+          { value: 'addComment', label: 'Add comment' },
+        ],
+      },
+      { key: 'listId', label: 'List ID', type: 'string', placeholder: '5f8...', visibleIf: (p) => (p.action ?? 'createCard') === 'createCard' },
+      { key: 'name', label: 'Card title', type: 'expression', placeholder: 'New card', visibleIf: (p) => (p.action ?? 'createCard') === 'createCard' },
+      { key: 'desc', label: 'Description', type: 'expression', visibleIf: (p) => (p.action ?? 'createCard') === 'createCard' },
+      { key: 'cardId', label: 'Card ID', type: 'string', placeholder: '5f8...', visibleIf: (p) => p.action === 'getCard' || p.action === 'addComment' },
+      { key: 'text', label: 'Comment text', type: 'expression', visibleIf: (p) => p.action === 'addComment' },
+    ],
+  },
+
+  jira: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'createIssue',
+        options: [
+          { value: 'createIssue', label: 'Create issue' },
+          { value: 'getIssue', label: 'Get issue' },
+          { value: 'addComment', label: 'Add comment' },
+        ],
+      },
+      { key: 'projectKey', label: 'Project key', type: 'string', placeholder: 'ENG', visibleIf: (p) => (p.action ?? 'createIssue') === 'createIssue' },
+      { key: 'summary', label: 'Summary', type: 'expression', placeholder: 'New issue', visibleIf: (p) => (p.action ?? 'createIssue') === 'createIssue' },
+      {
+        key: 'issueType',
+        label: 'Issue type',
+        type: 'enum',
+        default: 'Task',
+        options: [
+          { value: 'Task', label: 'Task' },
+          { value: 'Bug', label: 'Bug' },
+          { value: 'Story', label: 'Story' },
+        ],
+        visibleIf: (p) => (p.action ?? 'createIssue') === 'createIssue',
+      },
+      { key: 'issueKey', label: 'Issue key', type: 'string', placeholder: 'ENG-123', visibleIf: (p) => p.action === 'getIssue' || p.action === 'addComment' },
+      { key: 'content', label: 'Comment text', type: 'expression', visibleIf: (p) => p.action === 'addComment' },
+    ],
+  },
+
+  discord: {
+    fields: [
+      { key: 'content', label: 'Message content', type: 'expression', placeholder: 'Deploy finished ✅' },
+      { key: 'username', label: 'Override webhook username (optional)', type: 'string', placeholder: 'FlowForge Bot' },
+    ],
+  },
+
+  telegram: {
+    fields: [
+      { key: 'chatId', label: 'Chat ID', type: 'string', placeholder: '-1001234567890', help: 'Numeric chat/channel/group ID the bot has access to.' },
+      { key: 'text', label: 'Message text', type: 'expression', placeholder: 'Hello from FlowForge!' },
+      {
+        key: 'parseMode',
+        label: 'Parse mode',
+        type: 'enum',
+        default: '',
+        options: [
+          { value: '', label: 'None (plain text)' },
+          { value: 'Markdown', label: 'Markdown' },
+          { value: 'HTML', label: 'HTML' },
+        ],
+      },
+    ],
+  },
+
+  email: {
+    fields: [
+      { key: 'to', label: 'To', type: 'expression', placeholder: 'someone@example.com' },
+      { key: 'subject', label: 'Subject', type: 'expression', placeholder: 'Hello' },
+      { key: 'body', label: 'Body', type: 'expression', placeholder: 'Message body...' },
+      { key: 'html', label: 'Body is HTML', type: 'boolean', default: false },
+    ],
+  },
+
+  outlook: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'sendMail',
+        options: [
+          { value: 'sendMail', label: 'Send mail' },
+          { value: 'listEvents', label: 'List calendar events' },
+          { value: 'createEvent', label: 'Create calendar event' },
+        ],
+      },
+      { key: 'to', label: 'To', type: 'expression', placeholder: 'someone@example.com', visibleIf: (p) => (p.action ?? 'sendMail') === 'sendMail' },
+      { key: 'subject', label: 'Subject', type: 'expression', visibleIf: (p) => (p.action ?? 'sendMail') === 'sendMail' },
+      { key: 'body', label: 'Body', type: 'expression', visibleIf: (p) => (p.action ?? 'sendMail') === 'sendMail' },
+      { key: 'timeMin', label: 'From (ISO datetime)', type: 'string', placeholder: '2026-07-01T00:00:00Z', visibleIf: (p) => p.action === 'listEvents' },
+      { key: 'timeMax', label: 'To (ISO datetime)', type: 'string', placeholder: '2026-07-31T23:59:59Z', visibleIf: (p) => p.action === 'listEvents' },
+      { key: 'event', label: 'Event (JSON)', type: 'json', rows: 4, help: 'Microsoft Graph event object, e.g. { "subject": "...", "start": {...}, "end": {...} }', visibleIf: (p) => p.action === 'createEvent' },
+    ],
+  },
+
+  googleDrive: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'listFiles',
+        options: [
+          { value: 'listFiles', label: 'List files' },
+          { value: 'downloadFile', label: 'Download file' },
+          { value: 'uploadFile', label: 'Upload file' },
+        ],
+      },
+      { key: 'query', label: 'Search query', type: 'string', placeholder: "name contains 'report'", visibleIf: (p) => (p.action ?? 'listFiles') === 'listFiles' },
+      { key: 'fileId', label: 'File ID', type: 'string', placeholder: '1A2b3C...', visibleIf: (p) => p.action === 'downloadFile' },
+      { key: 'fileName', label: 'File name', type: 'string', placeholder: 'report.txt', visibleIf: (p) => p.action === 'uploadFile' },
+      { key: 'mimeType', label: 'MIME type', type: 'string', placeholder: 'text/plain', visibleIf: (p) => p.action === 'uploadFile' },
+      { key: 'content', label: 'File content', type: 'expression', visibleIf: (p) => p.action === 'uploadFile' },
+    ],
+  },
+
+  zoom: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'createMeeting',
+        options: [
+          { value: 'createMeeting', label: 'Create meeting' },
+          { value: 'getMeeting', label: 'Get meeting' },
+          { value: 'listRecordings', label: 'List recordings' },
+        ],
+      },
+      { key: 'topic', label: 'Meeting topic', type: 'expression', placeholder: 'Weekly sync', visibleIf: (p) => (p.action ?? 'createMeeting') === 'createMeeting' },
+      { key: 'startTime', label: 'Start time (ISO)', type: 'string', placeholder: '2026-08-01T15:00:00Z', visibleIf: (p) => (p.action ?? 'createMeeting') === 'createMeeting' },
+      { key: 'duration', label: 'Duration (minutes)', type: 'number', default: 30, visibleIf: (p) => (p.action ?? 'createMeeting') === 'createMeeting' },
+      { key: 'meetingId', label: 'Meeting ID', type: 'string', visibleIf: (p) => p.action === 'getMeeting' },
+      { key: 'userId', label: 'User ID (optional, default "me")', type: 'string', visibleIf: (p) => p.action === 'listRecordings' },
+      { key: 'from', label: 'From date', type: 'string', placeholder: '2026-07-01', visibleIf: (p) => p.action === 'listRecordings' },
+      { key: 'to', label: 'To date', type: 'string', placeholder: '2026-07-31', visibleIf: (p) => p.action === 'listRecordings' },
+    ],
+  },
+
+  mongodb: {
+    fields: [
+      { key: 'database', label: 'Database', type: 'string', placeholder: 'mydb' },
+      { key: 'collection', label: 'Collection', type: 'string', placeholder: 'orders' },
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'find',
+        options: [
+          { value: 'find', label: 'Find' },
+          { value: 'insertOne', label: 'Insert one' },
+          { value: 'updateOne', label: 'Update one' },
+          { value: 'deleteOne', label: 'Delete one' },
+        ],
+      },
+      { key: 'filter', label: 'Filter (JSON)', type: 'json', rows: 3, default: {}, visibleIf: (p) => ['find', 'updateOne', 'deleteOne'].includes(String(p.action ?? 'find')) },
+      { key: 'limit', label: 'Limit', type: 'number', default: 100, visibleIf: (p) => (p.action ?? 'find') === 'find' },
+      { key: 'document', label: 'Document (JSON)', type: 'json', rows: 4, default: {}, visibleIf: (p) => p.action === 'insertOne' },
+      { key: 'update', label: 'Update (JSON)', type: 'json', rows: 3, default: { $set: {} }, help: 'MongoDB update operators, e.g. { "$set": { "status": "done" } }', visibleIf: (p) => p.action === 'updateOne' },
+    ],
+  },
+
+  sentry: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'listIssues',
+        options: [
+          { value: 'listIssues', label: 'List issues' },
+          { value: 'getIssue', label: 'Get issue' },
+          { value: 'resolveIssue', label: 'Resolve issue' },
+        ],
+      },
+      { key: 'projectSlug', label: 'Project slug', type: 'string', placeholder: 'my-project', visibleIf: (p) => (p.action ?? 'listIssues') === 'listIssues' },
+      { key: 'query', label: 'Search query', type: 'string', default: 'is:unresolved', visibleIf: (p) => (p.action ?? 'listIssues') === 'listIssues' },
+      { key: 'issueId', label: 'Issue ID', type: 'string', visibleIf: (p) => p.action === 'getIssue' || p.action === 'resolveIssue' },
+    ],
+  },
+
+  sendgrid: {
+    fields: [
+      { key: 'to', label: 'To', type: 'expression', placeholder: 'someone@example.com' },
+      { key: 'from', label: 'From', type: 'expression', placeholder: 'alerts@yourdomain.com' },
+      { key: 'subject', label: 'Subject', type: 'expression', placeholder: 'Hello' },
+      { key: 'text', label: 'Plain text body', type: 'expression', help: 'Used unless an HTML body is also set below.' },
+      { key: 'html', label: 'HTML body (optional)', type: 'expression' },
+    ],
+  },
+
+  youtube: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'listVideos',
+        options: [
+          { value: 'listVideos', label: 'List videos' },
+          { value: 'updateVideo', label: 'Update video' },
+        ],
+      },
+      { key: 'channelId', label: 'Channel ID (optional, defaults to your channel)', type: 'string', visibleIf: (p) => (p.action ?? 'listVideos') === 'listVideos' },
+      { key: 'videoId', label: 'Video ID', type: 'string', placeholder: 'dQw4w9WgXcQ', visibleIf: (p) => p.action === 'updateVideo' },
+      { key: 'snippet', label: 'Snippet (JSON)', type: 'json', rows: 3, default: { title: '', description: '' }, help: 'Fields to update, e.g. { "title": "New title" }', visibleIf: (p) => p.action === 'updateVideo' },
+    ],
+  },
+
+  asana: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'createTask',
+        options: [
+          { value: 'createTask', label: 'Create task' },
+          { value: 'getTask', label: 'Get task' },
+          { value: 'updateTask', label: 'Update task' },
+          { value: 'listTasksInProject', label: 'List tasks in project' },
+          { value: 'addComment', label: 'Add comment' },
+        ],
+      },
+      { key: 'projectId', label: 'Project ID', type: 'string', visibleIf: (p) => ['createTask', 'listTasksInProject'].includes(String(p.action ?? 'createTask')) },
+      { key: 'name', label: 'Task name', type: 'expression', visibleIf: (p) => ['createTask', 'updateTask'].includes(String(p.action ?? 'createTask')) },
+      { key: 'notes', label: 'Notes', type: 'expression', visibleIf: (p) => ['createTask', 'updateTask'].includes(String(p.action ?? 'createTask')) },
+      { key: 'completed', label: 'Completed', type: 'boolean', default: false, visibleIf: (p) => p.action === 'updateTask' },
+      { key: 'taskId', label: 'Task ID', type: 'string', visibleIf: (p) => ['getTask', 'updateTask', 'addComment'].includes(String(p.action ?? '')) },
+      { key: 'text', label: 'Comment text', type: 'expression', visibleIf: (p) => p.action === 'addComment' },
+    ],
+  },
+
+  clickup: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'createTask',
+        options: [
+          { value: 'createTask', label: 'Create task' },
+          { value: 'getTask', label: 'Get task' },
+          { value: 'updateTask', label: 'Update task' },
+          { value: 'listTasksInList', label: 'List tasks in list' },
+        ],
+      },
+      { key: 'listId', label: 'List ID', type: 'string', visibleIf: (p) => ['createTask', 'listTasksInList'].includes(String(p.action ?? 'createTask')) },
+      { key: 'name', label: 'Task name', type: 'expression', visibleIf: (p) => ['createTask', 'updateTask'].includes(String(p.action ?? 'createTask')) },
+      { key: 'description', label: 'Description', type: 'expression', visibleIf: (p) => ['createTask', 'updateTask'].includes(String(p.action ?? 'createTask')) },
+      { key: 'status', label: 'Status', type: 'string', placeholder: 'in progress', visibleIf: (p) => ['createTask', 'updateTask'].includes(String(p.action ?? 'createTask')) },
+      { key: 'taskId', label: 'Task ID', type: 'string', visibleIf: (p) => p.action === 'getTask' || p.action === 'updateTask' },
+    ],
+  },
+
+  linear: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'createIssue',
+        options: [
+          { value: 'createIssue', label: 'Create issue' },
+          { value: 'getIssue', label: 'Get issue' },
+          { value: 'updateIssue', label: 'Update issue' },
+        ],
+      },
+      { key: 'teamId', label: 'Team ID', type: 'string', visibleIf: (p) => (p.action ?? 'createIssue') === 'createIssue' },
+      { key: 'title', label: 'Title', type: 'expression', visibleIf: (p) => ['createIssue', 'updateIssue'].includes(String(p.action ?? 'createIssue')) },
+      { key: 'description', label: 'Description', type: 'expression', visibleIf: (p) => ['createIssue', 'updateIssue'].includes(String(p.action ?? 'createIssue')) },
+      { key: 'stateId', label: 'State ID', type: 'string', visibleIf: (p) => p.action === 'updateIssue' },
+      { key: 'issueId', label: 'Issue ID', type: 'string', visibleIf: (p) => p.action === 'getIssue' || p.action === 'updateIssue' },
+    ],
+  },
+
+  msTeams: {
+    fields: [
+      { key: 'title', label: 'Title (optional)', type: 'expression', placeholder: 'Deploy status' },
+      { key: 'text', label: 'Message text', type: 'expression', placeholder: 'Build succeeded ✅' },
+    ],
+  },
+
+  mysql: {
+    fields: [
+      { key: 'query', label: 'SQL query', type: 'expression', placeholder: 'SELECT * FROM orders WHERE id = ?' },
+      { key: 'values', label: 'Query parameters (JSON array)', type: 'json', rows: 2, default: [], help: 'Bound in order for each ? placeholder in the query above.' },
+    ],
+  },
+
+  elasticsearch: {
+    fields: [
+      { key: 'index', label: 'Index', type: 'string', placeholder: 'orders' },
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'search',
+        options: [
+          { value: 'search', label: 'Search' },
+          { value: 'index', label: 'Index document' },
+          { value: 'delete', label: 'Delete document' },
+        ],
+      },
+      { key: 'query', label: 'Query (JSON)', type: 'json', rows: 4, default: { query: { match_all: {} } }, visibleIf: (p) => (p.action ?? 'search') === 'search' },
+      { key: 'id', label: 'Document ID (optional on index, required on delete)', type: 'string', visibleIf: (p) => p.action === 'index' || p.action === 'delete' },
+      { key: 'document', label: 'Document (JSON)', type: 'json', rows: 4, default: {}, visibleIf: (p) => p.action === 'index' },
+    ],
+  },
+
+  pagerduty: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'triggerIncident',
+        options: [
+          { value: 'triggerIncident', label: 'Trigger incident' },
+          { value: 'acknowledgeIncident', label: 'Acknowledge incident' },
+          { value: 'resolveIncident', label: 'Resolve incident' },
+          { value: 'listIncidents', label: 'List incidents' },
+        ],
+      },
+      { key: 'summary', label: 'Summary', type: 'expression', placeholder: 'API latency spike', visibleIf: (p) => (p.action ?? 'triggerIncident') === 'triggerIncident' },
+      { key: 'source', label: 'Source', type: 'string', default: 'flowforge', visibleIf: (p) => (p.action ?? 'triggerIncident') === 'triggerIncident' },
+      {
+        key: 'severity',
+        label: 'Severity',
+        type: 'enum',
+        default: 'error',
+        options: [
+          { value: 'critical', label: 'Critical' },
+          { value: 'error', label: 'Error' },
+          { value: 'warning', label: 'Warning' },
+          { value: 'info', label: 'Info' },
+        ],
+        visibleIf: (p) => (p.action ?? 'triggerIncident') === 'triggerIncident',
+      },
+      { key: 'dedupKey', label: 'Dedup key', type: 'string', help: 'Ties trigger/acknowledge/resolve events to the same incident.', visibleIf: (p) => ['triggerIncident', 'acknowledgeIncident', 'resolveIncident'].includes(String(p.action ?? 'triggerIncident')) },
+    ],
+  },
+
+  datadog: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'submitMetric',
+        options: [
+          { value: 'submitMetric', label: 'Submit metric' },
+          { value: 'submitLog', label: 'Submit log' },
+        ],
+      },
+      { key: 'metricName', label: 'Metric name', type: 'string', placeholder: 'flowforge.workflow.runs', visibleIf: (p) => (p.action ?? 'submitMetric') === 'submitMetric' },
+      { key: 'value', label: 'Value', type: 'number', default: 0, visibleIf: (p) => (p.action ?? 'submitMetric') === 'submitMetric' },
+      { key: 'tags', label: 'Tags (JSON array)', type: 'json', rows: 2, default: [], visibleIf: (p) => (p.action ?? 'submitMetric') === 'submitMetric' },
+      { key: 'message', label: 'Log message', type: 'expression', visibleIf: (p) => p.action === 'submitLog' },
+      { key: 'service', label: 'Service name', type: 'string', visibleIf: (p) => p.action === 'submitLog' },
+    ],
+  },
+
+  calendly: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'listEvents',
+        options: [
+          { value: 'listEvents', label: 'List events' },
+          { value: 'getInvitee', label: 'Get invitee' },
+          { value: 'cancelEvent', label: 'Cancel event' },
+        ],
+      },
+      { key: 'userUri', label: 'User URI (optional, defaults to the authenticated user)', type: 'string', visibleIf: (p) => (p.action ?? 'listEvents') === 'listEvents' },
+      { key: 'eventUuid', label: 'Event UUID', type: 'string', visibleIf: (p) => p.action === 'getInvitee' || p.action === 'cancelEvent' },
+      { key: 'inviteeUuid', label: 'Invitee UUID', type: 'string', visibleIf: (p) => p.action === 'getInvitee' },
+      { key: 'reason', label: 'Cancellation reason', type: 'expression', visibleIf: (p) => p.action === 'cancelEvent' },
+    ],
+  },
+
+  sftp: {
+    fields: [
+      {
+        key: 'protocol',
+        label: 'Protocol',
+        type: 'enum',
+        default: 'sftp',
+        options: [
+          { value: 'sftp', label: 'SFTP' },
+          { value: 'ftp', label: 'FTP' },
+        ],
+      },
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'list',
+        options: [
+          { value: 'list', label: 'List directory' },
+          { value: 'upload', label: 'Upload file' },
+          { value: 'download', label: 'Download file' },
+        ],
+      },
+      { key: 'remotePath', label: 'Remote path', type: 'string', placeholder: '/uploads' },
+      { key: 'content', label: 'File content', type: 'expression', visibleIf: (p) => p.action === 'upload' },
+    ],
+  },
+
+  paypal: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'createOrder',
+        options: [
+          { value: 'createOrder', label: 'Create order' },
+          { value: 'captureOrder', label: 'Capture order' },
+        ],
+      },
+      { key: 'amount', label: 'Amount', type: 'string', placeholder: '10.00', visibleIf: (p) => (p.action ?? 'createOrder') === 'createOrder' },
+      { key: 'currency', label: 'Currency', type: 'string', default: 'USD', visibleIf: (p) => (p.action ?? 'createOrder') === 'createOrder' },
+      { key: 'orderId', label: 'Order ID', type: 'string', visibleIf: (p) => p.action === 'captureOrder' },
+    ],
+  },
+
+  quickbooks: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'listInvoices',
+        options: [
+          { value: 'listInvoices', label: 'List invoices' },
+          { value: 'createInvoice', label: 'Create invoice' },
+          { value: 'createCustomer', label: 'Create customer' },
+        ],
+      },
+      { key: 'query', label: 'SQL-like query', type: 'string', default: 'select * from Invoice maxresults 25', visibleIf: (p) => (p.action ?? 'listInvoices') === 'listInvoices' },
+      { key: 'invoice', label: 'Invoice (JSON)', type: 'json', rows: 4, default: {}, help: 'QuickBooks Invoice object — see QuickBooks API docs.', visibleIf: (p) => p.action === 'createInvoice' },
+      { key: 'customer', label: 'Customer (JSON)', type: 'json', rows: 4, default: { DisplayName: '' }, visibleIf: (p) => p.action === 'createCustomer' },
+    ],
+  },
+
+  xero: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'listInvoices',
+        options: [
+          { value: 'listInvoices', label: 'List invoices' },
+          { value: 'createInvoice', label: 'Create invoice' },
+          { value: 'createContact', label: 'Create contact' },
+        ],
+      },
+      { key: 'invoice', label: 'Invoice (JSON)', type: 'json', rows: 4, default: {}, help: 'Xero Invoice object — see Xero API docs.', visibleIf: (p) => p.action === 'createInvoice' },
+      { key: 'contact', label: 'Contact (JSON)', type: 'json', rows: 3, default: { Name: '' }, visibleIf: (p) => p.action === 'createContact' },
+    ],
+  },
+
+  zendesk: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'createTicket',
+        options: [
+          { value: 'createTicket', label: 'Create ticket' },
+          { value: 'updateTicket', label: 'Update ticket' },
+        ],
+      },
+      { key: 'subject', label: 'Subject', type: 'expression', visibleIf: (p) => (p.action ?? 'createTicket') === 'createTicket' },
+      { key: 'body', label: 'Description', type: 'expression', visibleIf: (p) => (p.action ?? 'createTicket') === 'createTicket' },
+      {
+        key: 'priority',
+        label: 'Priority',
+        type: 'enum',
+        default: 'normal',
+        options: [
+          { value: 'low', label: 'Low' },
+          { value: 'normal', label: 'Normal' },
+          { value: 'high', label: 'High' },
+          { value: 'urgent', label: 'Urgent' },
+        ],
+        visibleIf: (p) => (p.action ?? 'createTicket') === 'createTicket',
+      },
+      { key: 'requesterEmail', label: 'Requester email (optional)', type: 'string', visibleIf: (p) => (p.action ?? 'createTicket') === 'createTicket' },
+      { key: 'ticketId', label: 'Ticket ID', type: 'string', visibleIf: (p) => p.action === 'updateTicket' },
+    ],
+  },
+
+  mailchimp: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'addMember',
+        options: [
+          { value: 'addMember', label: 'Add subscriber' },
+          { value: 'listMembers', label: 'List subscribers' },
+          { value: 'createCampaign', label: 'Create campaign' },
+        ],
+      },
+      { key: 'listId', label: 'Audience/List ID', type: 'string', visibleIf: (p) => ['addMember', 'listMembers'].includes(String(p.action ?? 'addMember')) },
+      { key: 'email', label: 'Email', type: 'expression', visibleIf: (p) => (p.action ?? 'addMember') === 'addMember' },
+      { key: 'mergeFields', label: 'Merge fields (JSON)', type: 'json', rows: 2, default: {}, visibleIf: (p) => (p.action ?? 'addMember') === 'addMember' },
+      { key: 'campaign', label: 'Campaign (JSON)', type: 'json', rows: 4, default: { type: 'regular' }, visibleIf: (p) => p.action === 'createCampaign' },
+    ],
+  },
+
+  segment: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'track',
+        options: [
+          { value: 'track', label: 'Track event' },
+          { value: 'identify', label: 'Identify user' },
+          { value: 'page', label: 'Page view' },
+          { value: 'group', label: 'Group' },
+        ],
+      },
+      { key: 'userId', label: 'User ID', type: 'expression', help: 'Either User ID or Anonymous ID is required.' },
+      { key: 'anonymousId', label: 'Anonymous ID (optional)', type: 'expression' },
+      { key: 'event', label: 'Event name', type: 'expression', visibleIf: (p) => (p.action ?? 'track') === 'track' },
+      { key: 'name', label: 'Page name', type: 'expression', visibleIf: (p) => p.action === 'page' },
+      { key: 'groupId', label: 'Group ID', type: 'expression', visibleIf: (p) => p.action === 'group' },
+      { key: 'traits', label: 'Traits (JSON)', type: 'json', rows: 2, default: {}, visibleIf: (p) => p.action === 'identify' },
+      { key: 'properties', label: 'Properties (JSON)', type: 'json', rows: 2, default: {}, visibleIf: (p) => (p.action ?? 'track') !== 'identify' },
+    ],
+  },
+
+  googleAds: {
+    fields: [
+      {
+        key: 'query',
+        label: 'GAQL query',
+        type: 'text',
+        placeholder: 'SELECT campaign.id, campaign.name, metrics.clicks FROM campaign WHERE segments.date DURING LAST_7_DAYS',
+        help: 'Google Ads Query Language. Leave blank for a default last-7-days campaign performance query.',
+      },
+    ],
+  },
+
+  metaAds: {
+    fields: [
+      { key: 'fields', label: 'Fields', type: 'string', default: 'campaign_name,impressions,clicks,spend' },
+      {
+        key: 'datePreset',
+        label: 'Date range',
+        type: 'enum',
+        default: 'last_7d',
+        options: [
+          { value: 'today', label: 'Today' },
+          { value: 'yesterday', label: 'Yesterday' },
+          { value: 'last_7d', label: 'Last 7 days' },
+          { value: 'last_30d', label: 'Last 30 days' },
+          { value: 'this_month', label: 'This month' },
+        ],
+      },
+      {
+        key: 'level',
+        label: 'Level',
+        type: 'enum',
+        default: 'campaign',
+        options: [
+          { value: 'account', label: 'Account' },
+          { value: 'campaign', label: 'Campaign' },
+          { value: 'adset', label: 'Ad set' },
+          { value: 'ad', label: 'Ad' },
+        ],
+      },
+    ],
+  },
+
+  amplitude: {
+    fields: [
+      { key: 'eventType', label: 'Event type', type: 'expression', placeholder: 'Signed Up' },
+      { key: 'userId', label: 'User ID', type: 'expression', help: 'Either User ID or Device ID is required.' },
+      { key: 'deviceId', label: 'Device ID (optional)', type: 'expression' },
+      { key: 'eventProperties', label: 'Event properties (JSON)', type: 'json', rows: 2, default: {} },
+      { key: 'userProperties', label: 'User properties (JSON)', type: 'json', rows: 2, default: {} },
+    ],
+  },
+
+  mixpanel: {
+    fields: [
+      { key: 'eventName', label: 'Event name', type: 'expression', placeholder: 'Signed Up' },
+      { key: 'distinctId', label: 'Distinct ID', type: 'expression' },
+      { key: 'properties', label: 'Properties (JSON)', type: 'json', rows: 3, default: {} },
+    ],
+  },
+
+  docusign: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'sendEnvelope',
+        options: [
+          { value: 'sendEnvelope', label: 'Send envelope' },
+          { value: 'getEnvelopeStatus', label: 'Get envelope status' },
+        ],
+      },
+      { key: 'envelope', label: 'Envelope (JSON)', type: 'json', rows: 5, default: { emailSubject: 'Please sign', status: 'sent' }, help: 'DocuSign envelope definition — see DocuSign eSignature API docs.', visibleIf: (p) => (p.action ?? 'sendEnvelope') === 'sendEnvelope' },
+      { key: 'envelopeId', label: 'Envelope ID', type: 'string', visibleIf: (p) => p.action === 'getEnvelopeStatus' },
+    ],
+  },
 };
 
 export function getParamSchema(nodeType: string): ParamSchema | undefined {

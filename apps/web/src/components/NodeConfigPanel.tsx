@@ -318,24 +318,19 @@ export default function NodeConfigPanel({
           />
         </div>
 
-        {[
-          'httpRequest',
-          'slack',
-          'discord',
-          'telegram',
-          'notion',
-          'github',
-          'postgres',
-          'email',
-          'googleSheets',
-          'openai',
-          'ragIngest',
-          'ragQuery',
-          'agent',
-          'agentMemory',
-          'agentOrchestrator',
-          'browserAutomation',
-        ].includes(nodeType) && (
+        {(
+          // Single source of truth: any node type listed in
+          // NODE_TYPE_TO_CREDENTIAL_TYPE needs a credential, plus a couple
+          // of nodes (browserAutomation) that intentionally have no formal
+          // credential *type* yet but still need the generic picker. This
+          // used to be a hand-maintained whitelist that fell out of sync
+          // with credentialSchemas.ts, so most integrations (LinkedIn,
+          // Twitter, Trello, Jira, ...) silently never showed a Credential
+          // field at all.
+          Object.prototype.hasOwnProperty.call(NODE_TYPE_TO_CREDENTIAL_TYPE, nodeType) ||
+          nodeType === 'browserAutomation' ||
+          nodeType === 'httpRequest'
+        ) && (
           <div>
             <label className="block text-xs text-muted mb-1">Credential</label>
             {(() => {
