@@ -13,7 +13,7 @@ import CanvasHandleMainOutput from './handles/CanvasHandleMainOutput';
 import CanvasHandleNonMainInput from './handles/CanvasHandleNonMainInput';
 import CanvasHandleNonMainOutput from './handles/CanvasHandleNonMainOutput';
 
-export type NodeStatus = 'idle' | 'running' | 'success' | 'failed' | 'skipped';
+export type NodeStatus = 'idle' | 'running' | 'success' | 'failed' | 'skipped' | 'paused';
 
 const STATUS_RING: Record<NodeStatus, string> = {
   idle: 'ring-panelBorder',
@@ -21,6 +21,7 @@ const STATUS_RING: Record<NodeStatus, string> = {
   success: 'ring-signal',
   failed: 'ring-alert',
   skipped: 'ring-panelBorder opacity-50',
+  paused: 'ring-amber',
 };
 
 const MIN_WIDTH = 160;

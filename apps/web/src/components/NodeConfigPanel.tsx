@@ -38,6 +38,8 @@ interface Props {
   siblingChatPaths?: string[];
   /** Whether a "Respond to Webhook" node exists anywhere else on the canvas. */
   hasRespondToWebhookNode?: boolean;
+  /** Whether the workflow is currently published/active — webhook and chat trigger URL previews use the `/test/...` path while unpublished, matching the API's test/production route split. */
+  isWorkflowActive?: boolean;
   onChange: (updates: {
     label?: string;
     params?: Record<string, unknown>;
@@ -81,6 +83,7 @@ export default function NodeConfigPanel({
   siblingWebhookPaths = [],
   siblingChatPaths = [],
   hasRespondToWebhookNode = false,
+  isWorkflowActive = false,
   onChange,
   onDelete,
   onClose,
@@ -260,7 +263,16 @@ export default function NodeConfigPanel({
           <input
             value={localLabel}
             onChange={(e) => setLocalLabel(e.target.value)}
-            onBlur={() => onChange({ label: localLabel })}
+            onBlur={() => {
+              let finalLabel = localLabel;
+              if (finalLabel && otherNodeLabels.includes(finalLabel)) {
+                let n = 2;
+                while (otherNodeLabels.includes(`${finalLabel} ${n}`)) n++;
+                finalLabel = `${finalLabel} ${n}`;
+                setLocalLabel(finalLabel);
+              }
+              onChange({ label: finalLabel });
+            }}
             className="focus-ring w-full bg-canvas border border-panelBorder rounded-md px-3 py-2 text-sm"
           />
         </div>
@@ -474,6 +486,7 @@ export default function NodeConfigPanel({
               siblingWebhookPaths={siblingWebhookPaths}
               siblingChatPaths={siblingChatPaths}
               hasRespondToWebhookNode={hasRespondToWebhookNode}
+              isWorkflowActive={isWorkflowActive}
             />
           )}
 

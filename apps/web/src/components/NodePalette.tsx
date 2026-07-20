@@ -118,8 +118,8 @@ export default function NodePalette({
     .filter((n): n is NodeTypeMeta => !!n);
 
   return (
-    <aside className="w-64 border-r border-panelBorder bg-panel shrink-0 overflow-y-auto flex flex-col">
-      <div className="px-4 py-4 border-b border-panelBorder space-y-2 sticky top-0 bg-panel z-10">
+    <aside className="w-64 h-full min-h-0 border-r border-panelBorder bg-panel shrink-0 flex flex-col">
+      <div className="px-4 py-4 border-b border-panelBorder space-y-2 shrink-0 bg-panel z-10">
         <p className="text-xs uppercase tracking-widest text-muted font-display">Nodes</p>
         <input
           type="text"
@@ -129,7 +129,7 @@ export default function NodePalette({
           className="focus-ring w-full bg-canvas border border-panelBorder rounded-md px-2.5 py-1.5 text-sm"
         />
       </div>
-      <div className="px-3 py-3 space-y-4 overflow-y-auto">
+      <div className="px-3 py-3 space-y-4 flex-1 min-h-0 overflow-y-auto">
         {!trimmedQuery && recentNodes.length > 0 && (
           <div>
             <p className="text-[10px] uppercase text-muted px-1 mb-1.5">Recently used</p>
@@ -176,6 +176,7 @@ export default function NodePalette({
         {filteredNodes.length === 0 && (
           <p className="text-muted text-xs px-2">No nodes match "{query}".</p>
         )}
+        <div className="h-2" aria-hidden="true" />
       </div>
     </aside>
   );

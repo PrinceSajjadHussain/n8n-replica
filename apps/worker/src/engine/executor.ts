@@ -7,7 +7,7 @@ import type {
   BinaryCollection,
   ExecutionJobData,
 } from '@flowforge/shared-types';
-import { resolveExpressions } from './expressions';
+import { resolveExpressions, type ExpressionErrorType } from './expressions';
 import { NODE_REGISTRY } from '../nodes';
 import { normalizeToItems, itemsToLegacyValue, decodeBinary, makeBinary } from '../nodes/types';
 import { dispatchExecutionAlerts, dispatchLogStreamEvent } from '../utils/alerts';
@@ -95,6 +95,8 @@ export type StatusEmitter = (event: {
   durationMs?: number;
   /** Item count of the node's output items array, when known. */
   itemCount?: number;
+  /** Expressions in this node's params that failed to evaluate (typed, per Fix 4) — surfaced in the UI instead of silently resolving to undefined. */
+  expressionErrors?: { param: string; message: string; type: ExpressionErrorType }[];
 }) => void;
 
 type NodeStatus = 'success' | 'failed' | 'skipped';
@@ -354,11 +356,14 @@ async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'faile
       const credential = node.credentialId ? await getDecryptedCredentialById(node.credentialId) : null;
 
       const nodesByLabel: Record<string, { json: unknown; binary?: unknown }> = {};
+      const nodesById: Record<string, { json: unknown; binary?: unknown }> = {};
       for (const n of nodes) {
         const label = n.label ?? n.type;
         const nOutputItems = outputs.get(n.id);
         if (nOutputItems) {
-          nodesByLabel[label] = { json: itemsToLegacyValue(nOutputItems), binary: itemsToBinarySummary(nOutputItems) };
+          const resolved = { json: itemsToLegacyValue(nOutputItems), binary: itemsToBinarySummary(nOutputItems) };
+          nodesByLabel[label] = resolved;
+          nodesById[n.id] = resolved;
         }
       }
       const exprCtx = {
@@ -367,11 +372,15 @@ async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'faile
         workflow: { id: workflowId },
         execution: { id: executionId },
         nodesByLabel,
+        nodesById,
         binary: itemsToBinarySummary(items),
         vars,
         staticData,
       };
-      const resolvedParams = resolveExpressions(node.params ?? {}, exprCtx);
+      const expressionErrors: { param: string; message: string; type: ExpressionErrorType }[] = [];
+      const resolvedParams = await resolveExpressions(node.params ?? {}, exprCtx, {
+        onError: (err) => expressionErrors.push(err),
+      });
 
       const maxAttempts = Math.max(1, node.retry?.maxAttempts ?? 1);
       const retryDelayMs = node.retry?.delayMs ?? 1000;
@@ -410,6 +419,7 @@ async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'faile
             output: softOutput,
             durationMs: Date.now() - startedAt,
             itemCount: 1,
+            expressionErrors: expressionErrors.length ? expressionErrors : undefined,
           });
         } else {
           throw lastError;
@@ -429,6 +439,7 @@ async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'faile
           durationMs: Date.now() - startedAt,
           itemCount: resultItems.length,
           binary: itemsToBinaryPreview(resultItems),
+          expressionErrors: expressionErrors.length ? expressionErrors : undefined,
         });
       }
     } catch (err) {

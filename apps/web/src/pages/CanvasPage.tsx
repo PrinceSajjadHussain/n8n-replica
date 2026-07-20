@@ -231,7 +231,7 @@ function CanvasPageDesktop() {
       setEdges((eds) =>
         eds.map((edge) =>
           edge.source === nodeId
-            ? { ...edge, animated: active, style: active ? { stroke: 'var(--color-signal, #22c55e)', strokeWidth: 2 } : undefined }
+            ? { ...edge, animated: active, style: active ? { stroke: 'rgb(var(--color-signal))', strokeWidth: 2.5 } : undefined }
             : edge
         )
       );
@@ -305,6 +305,19 @@ function CanvasPageDesktop() {
       setEdges((eds) => eds.map((edge) => ({ ...edge, animated: false, style: undefined })));
       setTimeout(() => setRunBanner(null), 4000);
       toast.info('Execution cancelled');
+    });
+    // Previously dropped silently (no case existed for these two statuses
+    // in the relay's old switch) — the canvas looked frozen on any
+    // workflow that paused or that hit a "Respond to Webhook" node.
+    socket.on('execution:paused', (e: any) => {
+      if (e.workflowId !== workflowId) return;
+      setRunBanner('Execution paused — waiting…');
+      if (e.nodeId) setNodeStatus(e.nodeId, 'paused' as NodeStatus);
+    });
+    socket.on('node:webhook-response', (e: any) => {
+      if (e.workflowId !== workflowId) return;
+      if (e.nodeId) setNodeStatus(e.nodeId, 'success' as NodeStatus, { lastRunOutput: e.output });
+      toast.info('Respond to Webhook node fired');
     });
 
     // Presence: viewer avatars + live cursor dots, scoped to this workflow's
@@ -436,8 +449,20 @@ function CanvasPageDesktop() {
     [resolvePortType]
   );
 
+  /** n8n auto-suffixes a duplicate default label at creation time rather than allowing a silent collision — matters now that `$node["Label"]` expressions resolve by this label. */
+  function uniqueLabel(label: string, excludeNodeId?: string): string {
+    const existing = new Set(
+      nodes.filter((n) => n.id !== excludeNodeId).map((n) => String((n.data as FlowNodeData).label ?? ''))
+    );
+    if (!existing.has(label)) return label;
+    let n = 2;
+    while (existing.has(`${label} ${n}`)) n++;
+    return `${label} ${n}`;
+  }
+
   function addNode(nodeType: string, label: string) {
     const id = nextId();
+    const uniqueLabelValue = uniqueLabel(label);
     const pending = pendingHandleRequest;
 
     // Wiring from a handle's "+": drop the new node offset from the node the
@@ -462,7 +487,7 @@ function CanvasPageDesktop() {
         id,
         type: 'flowNode',
         position,
-        data: { label, nodeType, status: 'idle', params: {}, credentialId: null },
+        data: { label: uniqueLabelValue, nodeType, status: 'idle', params: {}, credentialId: null },
       },
     ]);
 
@@ -650,6 +675,8 @@ function CanvasPageDesktop() {
     const original = nodes.find((n) => n.id === selectedNodeId);
     if (!original) return;
     const id = nextId();
+    const originalLabel = String((original.data as FlowNodeData).label ?? original.id);
+    const newLabel = uniqueLabel(originalLabel);
     setNodes((nds) => [
       ...nds,
       {
@@ -657,9 +684,10 @@ function CanvasPageDesktop() {
         id,
         position: { x: original.position.x + 40, y: original.position.y + 40 },
         selected: false,
+        data: { ...original.data, label: newLabel },
       },
     ]);
-    toast.info(`Duplicated "${(original.data as FlowNodeData).label ?? original.id}"`);
+    toast.info(`Duplicated "${originalLabel}"`);
   }
 
   // Keyboard shortcuts: Ctrl/Cmd+S save, Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z
@@ -1060,7 +1088,7 @@ function CanvasPageDesktop() {
       </header>
 
       <div className="flex-1 flex min-h-0">
-        <div className="flex flex-col">
+        <div className="flex flex-col min-h-0 h-full">
           {pendingHandleRequest && (
             <div className="flex items-center gap-2 px-3 py-2 text-xs border-b border-panelBorder bg-panel">
               <span style={{ color: CONNECTION_TYPE_META[pendingHandleRequest.port.type].color }}>●</span>
@@ -1153,6 +1181,7 @@ function CanvasPageDesktop() {
               .map((n) => String((n.data.params as Record<string, unknown> | undefined)?.path ?? 'default'))
               .filter(Boolean)}
             hasRespondToWebhookNode={nodes.some((n) => n.data.nodeType === 'respondToWebhook')}
+            isWorkflowActive={isActive}
             onChange={updateSelectedNode}
             onDelete={deleteSelectedNode}
             onClose={() => setSelectedNodeId(null)}

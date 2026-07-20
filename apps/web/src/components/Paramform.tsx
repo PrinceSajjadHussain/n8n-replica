@@ -17,6 +17,8 @@ interface Props {
   siblingChatPaths?: string[];
   /** Whether a "Respond to Webhook" node exists anywhere else in this workflow — used to warn when responseMode is set to responseNode but nothing will ever answer it. */
   hasRespondToWebhookNode?: boolean;
+  /** Whether the workflow is currently published/active — the webhook/chat "Final URL preview" uses the `/test/...` path while unpublished, matching the API's test vs. production route split. */
+  isWorkflowActive?: boolean;
 }
 
 const inputClass =
@@ -310,6 +312,7 @@ export default function ParamForm({
   siblingWebhookPaths = [],
   siblingChatPaths = [],
   hasRespondToWebhookNode = false,
+  isWorkflowActive = false,
 }: Props) {
   return (
     <div className="grid gap-3">
@@ -322,7 +325,12 @@ export default function ParamForm({
       ))}
 
       {nodeType === 'webhook' && (
-        <WebhookGuidedExtras params={params} workflowId={workflowId} siblingPaths={siblingWebhookPaths} />
+        <WebhookGuidedExtras
+          params={params}
+          workflowId={workflowId}
+          siblingPaths={siblingWebhookPaths}
+          isWorkflowActive={isWorkflowActive}
+        />
       )}
       {nodeType === 'chatTrigger' && (
         <ChatGuidedExtras
@@ -330,6 +338,7 @@ export default function ParamForm({
           workflowId={workflowId}
           siblingPaths={siblingChatPaths}
           hasRespondToWebhookNode={hasRespondToWebhookNode}
+          isWorkflowActive={isWorkflowActive}
         />
       )}
       {nodeType === 'schedule' && <ScheduleGuidedExtras params={params} />}
@@ -399,19 +408,25 @@ function WebhookGuidedExtras({
   params,
   workflowId,
   siblingPaths,
+  isWorkflowActive,
 }: {
   params: Record<string, unknown>;
   workflowId?: string;
   siblingPaths: string[];
+  isWorkflowActive?: boolean;
 }) {
   const path = String(params.path ?? '');
-  const url = `${API_ORIGIN}/webhook/${workflowId ?? ':workflowId'}/${path || ':path'}`;
+  const urlBase = isWorkflowActive ? '/webhook' : '/webhook/test';
+  const url = `${API_ORIGIN}${urlBase}/${workflowId ?? ':workflowId'}/${path || ':path'}`;
   const isDuplicate = path.length > 0 && siblingPaths.includes(path);
   const [copied, setCopied] = useState(false);
 
   return (
     <div className="border-t border-panelBorder pt-3">
       <label className={labelClass}>Final URL preview</label>
+      {!isWorkflowActive && (
+        <p className={helpClass}>Workflow isn't published yet — this test URL runs your current draft.</p>
+      )}
       <div className="flex items-center gap-1.5">
         <code className="flex-1 min-w-0 truncate text-[11px] bg-canvas border border-panelBorder rounded-md px-2 py-1.5">
           {url}
@@ -442,14 +457,17 @@ function ChatGuidedExtras({
   workflowId,
   siblingPaths,
   hasRespondToWebhookNode,
+  isWorkflowActive,
 }: {
   params: Record<string, unknown>;
   workflowId?: string;
   siblingPaths: string[];
   hasRespondToWebhookNode: boolean;
+  isWorkflowActive?: boolean;
 }) {
   const path = String(params.path ?? 'default');
-  const url = `${API_ORIGIN}/chat/${workflowId ?? ':workflowId'}/${path || 'default'}`;
+  const urlBase = isWorkflowActive ? '/chat' : '/chat/test';
+  const url = `${API_ORIGIN}${urlBase}/${workflowId ?? ':workflowId'}/${path || 'default'}`;
   const isDuplicate = path.length > 0 && siblingPaths.includes(path);
   const responseMode = String(params.responseMode ?? 'lastNode');
   const [copied, setCopied] = useState(false);
@@ -460,6 +478,9 @@ function ChatGuidedExtras({
     <div className="border-t border-panelBorder pt-3 grid gap-3">
       <div>
         <label className={labelClass}>Final URL preview</label>
+        {!isWorkflowActive && (
+          <p className={helpClass}>Workflow isn't published yet — this test URL runs your current draft.</p>
+        )}
         <div className="flex items-center gap-1.5">
           <code className="flex-1 min-w-0 truncate text-[11px] bg-canvas border border-panelBorder rounded-md px-2 py-1.5">
             {url}
@@ -477,8 +498,10 @@ function ChatGuidedExtras({
           </button>
         </div>
         <p className={helpClass}>
-          POST here with a JSON body like <code className="text-[10px]">{examplePayload}</code>. The workflow must be
-          active — inactive workflows return 403. Reply is held open until the run finishes (default {60}s timeout).
+          POST here with a JSON body like <code className="text-[10px]">{examplePayload}</code>.{' '}
+          {isWorkflowActive
+            ? 'Reply is held open until the run finishes (default 60s timeout).'
+            : "This test path runs against your current draft and works even though the workflow isn't published yet. Reply is held open until the run finishes (default 60s timeout)."}
         </p>
         {isDuplicate && (
           <p className={errorClass}>

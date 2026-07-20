@@ -4,6 +4,7 @@ import IORedis from 'ioredis';
 import { verifyAccessToken } from '../utils/jwt';
 import { pool } from '../db/pool';
 import { findUserById } from '../db/users';
+import { realtimeStatusHandlers, type RealtimeStatusEvent } from './handlers';
 
 const STATUS_CHANNEL = 'flowforge:execution-status';
 
@@ -118,48 +119,27 @@ export function initRealtime(httpServer: HTTPServer): SocketIOServer {
   subscriber.subscribe(STATUS_CHANNEL);
   subscriber.on('message', async (_channel, message) => {
     try {
-      const event = JSON.parse(message) as {
-        workflowId: string;
-        executionId: string;
-        nodeId?: string;
-        status: string;
-        output?: unknown;
-        input?: unknown;
-        error?: string;
-        durationMs?: number;
-        itemCount?: number;
-      };
+      const event = JSON.parse(message) as RealtimeStatusEvent;
 
-      // Resolve which user owns this workflow so we scope the broadcast.
+      // Resolve which user owns this workflow — still used as one of the
+      // two broadcast rooms (so the owner sees events even if they
+      // haven't joined the workflow's presence room), but no longer the
+      // ONLY room: see handlers/types.ts broadcastRooms().
       const result = await pool.query(`SELECT "userId" FROM "Workflow" WHERE id = $1`, [
         event.workflowId,
       ]);
-      const userId = result.rows[0]?.userId;
-      if (!userId) return;
+      const ownerId = result.rows[0]?.userId;
+      if (!ownerId) return;
 
-      const room = `user:${userId}`;
-      switch (event.status) {
-        case 'started':
-          io.to(room).emit('execution:started', event);
-          break;
-        case 'running':
-          io.to(room).emit('node:started', event);
-          break;
-        case 'success':
-          io.to(room).emit('node:completed', event);
-          break;
-        case 'failed':
-          io.to(room).emit('node:failed', event);
-          break;
-        case 'skipped':
-          io.to(room).emit('node:skipped', event);
-          break;
-        case 'completed':
-          io.to(room).emit('execution:completed', event);
-          break;
-        case 'cancelled':
-          io.to(room).emit('execution:cancelled', event);
-          break;
+      const handler = realtimeStatusHandlers[event.status];
+      if (handler) {
+        handler(io, ownerId, event);
+      } else {
+        // A status the worker publishes but no handler exists for yet —
+        // logged loudly instead of silently dropped, so a future new
+        // status can't disappear the same way `paused` and
+        // `webhook-response` previously did.
+        console.warn(`No realtime handler registered for execution status "${event.status}"`, event);
       }
     } catch (err) {
       console.error('Failed to relay realtime event', err);

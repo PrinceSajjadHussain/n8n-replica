@@ -55,8 +55,8 @@ export default function PelletEdge({
           className="edge-pellet"
           style={{
             offsetPath: `path('${edgePath}')`,
-            fill: 'var(--color-signal, #22c55e)',
-            filter: 'drop-shadow(0 0 3px var(--color-signal, #22c55e))',
+            fill: 'rgb(var(--color-signal))',
+            filter: 'drop-shadow(0 0 4px rgb(var(--color-signal) / 0.9))',
           }}
         />
       )}

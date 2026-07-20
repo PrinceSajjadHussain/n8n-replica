@@ -1,26 +1,42 @@
+import ivm from 'isolated-vm';
 import { randomUUID, createHash } from 'crypto';
 
 /**
- * Minimal n8n-style expression engine.
+ * n8n-style expression engine — real sandboxed JavaScript, not a regex
+ * whitelist.
  *
- * Supported in any string param value:
- *   {{$json.path.to.field}}        -> value from this node's resolved input
- *   {{$node["Label"].json.field}}  -> output of a previously-run node, by label
- *   {{$env.NAME}}                  -> process.env.NAME
- *   {{$workflow.id}} / {{$execution.id}}
- *   {{$vars.NAME}}                  -> value from the global/workspace Variables store
- *   {{$staticData.NAME}}            -> value from this workflow's persisted static-data blob
- *                                      (see $getWorkflowStaticData()/$setWorkflowStaticData() in the Code node)
- *   {{$now}}  -> ISO timestamp    {{$today}} -> YYYY-MM-DD
- *   {{$item.field}}                -> current item (inside forEach)
- *   {{$binary.data.mimeType}}      -> metadata (mimeType/fileName/fileSize) of binary
- *                                      attachments on the input item(s) — never the raw bytes
- *   {{$node["Label"].binary.data.fileName}} -> same, for a specific upstream node's output
- * Whole-param resolution: if the ENTIRE string is a single {{...}} expression,
- * the resolved value keeps its original type (object/array/number/etc). If it's
- * a template with surrounding text, the resolved value is stringified and spliced in.
- * Params are walked recursively (objects/arrays), so this works anywhere in
- * a node's JSON params, not just top-level strings.
+ * Any string param value may contain one or more `{{ ... }}` blocks. The
+ * content of each block is evaluated as an actual JavaScript expression
+ * inside a fresh `isolated-vm` isolate (the same sandbox technology the
+ * Code node uses), with these read-only globals available:
+ *
+ *   $json           -> this node's resolved input
+ *   $item           -> current loop item, if inside a forEach
+ *   $node["Label"] -> { json, binary } of a previously-run node, resolved
+ *                      by display label OR stable node id (label first)
+ *   $env.NAME       -> process.env.NAME
+ *   $vars.NAME      -> global/workspace Variables store
+ *   $staticData     -> this workflow's persisted static-data blob
+ *   $workflow.id / $execution.id
+ *   $now / $today   -> current ISO timestamp / YYYY-MM-DD
+ *   $binary         -> metadata (mimeType/fileName/fileSize) for the
+ *                      current input item(s) — never raw bytes
+ *   $fn.<namespace>.<fn>(...) -> the same helper library as before
+ *      (date/string/math/random/hash/json), now callable as ordinary
+ *      functions inside real JS rather than parsed positionally.
+ *
+ * Because it's real JS, ternaries, method calls, arithmetic, template
+ * literals, arbitrary chaining — anything valid inside a single
+ * expression — now works, instead of silently resolving to `undefined`
+ * outside a fixed set of regex-matched shapes.
+ *
+ * Whole-param resolution: if the ENTIRE string is a single {{...}}
+ * expression, the resolved value keeps its original type (object/array/
+ * number/etc). If it's a template with surrounding text, the resolved
+ * value is stringified and spliced in.
+ *
+ * Params are walked recursively (objects/arrays), so this works anywhere
+ * in a node's JSON params, not just top-level strings.
  */
 
 export interface ExpressionContext {
@@ -28,7 +44,16 @@ export interface ExpressionContext {
   env: Record<string, string | undefined>;
   workflow: { id: string };
   execution: { id: string };
+  /** Keyed by node display label (n8n's primary `$node[...]` lookup key). */
   nodesByLabel: Record<string, { json: unknown; binary?: unknown }>;
+  /**
+   * Keyed by stable node id. `$node[...]` checks label first, then id, so
+   * a duplicate-label collision (frontend now auto-suffixes on
+   * create/rename, but pre-existing workflows may still have one) can be
+   * disambiguated by id, and expressions authored against ids keep
+   * working even if a node is later relabeled.
+   */
+  nodesById: Record<string, { json: unknown; binary?: unknown }>;
   /** Global/workspace Variables store, keyed by name — see {{$vars.NAME}}. */
   vars: Record<string, string>;
   /** This workflow's persisted static-data blob ($getWorkflowStaticData() equivalent) — see {{$staticData.KEY}}. */
@@ -40,100 +65,25 @@ export interface ExpressionContext {
 
 const EXPR_RE = /\{\{\s*([\s\S]+?)\s*\}\}/g;
 
-function getPath(obj: unknown, path: string): unknown {
-  if (!path) return obj;
-  return path
-    .replace(/\[(\d+)\]/g, '.$1')
-    .split('.')
-    .filter(Boolean)
-    .reduce<unknown>((acc, key) => (acc == null ? undefined : (acc as Record<string, unknown>)[key]), obj);
-}
+export type ExpressionErrorType = 'timeout' | 'memory' | 'syntax' | 'security' | 'runtime';
 
-function evalExpr(expr: string, ctx: ExpressionContext): unknown {
-  const trimmed = expr.trim();
-
-  if (trimmed === '$now') return new Date().toISOString();
-  if (trimmed === '$today') return new Date().toISOString().slice(0, 10);
-  if (trimmed === '$workflow.id') return ctx.workflow.id;
-  if (trimmed === '$execution.id') return ctx.execution.id;
-
-  let m = trimmed.match(/^\$json\.?(.*)$/);
-  if (m) return getPath(ctx.json, m[1]);
-
-  m = trimmed.match(/^\$item\.?(.*)$/);
-  if (m) return getPath(ctx.item, m[1]);
-
-  m = trimmed.match(/^\$binary\.?(.*)$/);
-  if (m) return getPath(ctx.binary, m[1]);
-
-  m = trimmed.match(/^\$env\.(.+)$/);
-  if (m) return ctx.env[m[1]];
-
-  m = trimmed.match(/^\$vars\.(.+)$/);
-  if (m) return ctx.vars[m[1]];
-
-  m = trimmed.match(/^\$staticData\.?(.*)$/);
-  if (m) return getPath(ctx.staticData, m[1]);
-
-  m = trimmed.match(/^\$node\["([^"]+)"\]\.json\.?(.*)$/);
-  if (m) {
-    const nodeOutput = ctx.nodesByLabel[m[1]];
-    return nodeOutput ? getPath(nodeOutput.json, m[2]) : undefined;
-  }
-
-  m = trimmed.match(/^\$node\["([^"]+)"\]\.binary\.?(.*)$/);
-  if (m) {
-    const nodeOutput = ctx.nodesByLabel[m[1]];
-    return nodeOutput ? getPath(nodeOutput.binary, m[2]) : undefined;
-  }
-
-  m = trimmed.match(/^\$fn\.(\w+)\.(\w+)\((.*)\)$/s);
-  if (m) return callHelper(m[1], m[2], m[3], ctx);
-
-  return undefined; // unknown expression -> leave blank rather than throw
-}
-
-/**
- * Helper function library, invoked as {{$fn.<namespace>.<fn>(args)}}.
- * Args are comma-separated and each arg is itself resolved as either a
- * nested expression (starts with $), a JSON literal (numbers/quoted
- * strings/true/false/null), or treated as a plain string.
- */
-function parseArgs(raw: string, ctx: ExpressionContext): unknown[] {
-  if (!raw.trim()) return [];
-  return raw.split(',').map((part) => {
-    const arg = part.trim();
-    if (arg.startsWith('$')) return evalExpr(arg, ctx);
-    if (/^-?\d+(\.\d+)?$/.test(arg)) return Number(arg);
-    if (arg === 'true') return true;
-    if (arg === 'false') return false;
-    if (arg === 'null') return null;
-    if ((arg.startsWith('"') && arg.endsWith('"')) || (arg.startsWith("'") && arg.endsWith("'"))) {
-      return arg.slice(1, -1);
-    }
-    return arg;
-  });
-}
-
-function callHelper(namespace: string, fn: string, rawArgs: string, ctx: ExpressionContext): unknown {
-  const args = parseArgs(rawArgs, ctx);
-  switch (namespace) {
-    case 'date':
-      return dateHelpers(fn, args);
-    case 'string':
-      return stringHelpers(fn, args);
-    case 'math':
-      return mathHelpers(fn, args);
-    case 'random':
-      return randomHelpers(fn);
-    case 'hash':
-      return hashHelpers(fn, args);
-    case 'json':
-      return jsonHelpers(fn, args);
-    default:
-      return undefined;
+export class ExpressionError extends Error {
+  type: ExpressionErrorType;
+  expression: string;
+  constructor(type: ExpressionErrorType, expression: string, message: string) {
+    super(message);
+    this.name = 'ExpressionError';
+    this.type = type;
+    this.expression = expression;
   }
 }
+
+const EXPRESSION_TIMEOUT_MS = 500;
+const EXPRESSION_MEMORY_LIMIT_MB = 32;
+
+// ---- $fn.<namespace>.<fn>(...) helper library — unchanged behavior, now
+// invoked as real function calls from inside the sandbox rather than
+// parsed out of a fixed `$fn.ns.fn(args)` regex shape. ----
 
 function dateHelpers(fn: string, args: unknown[]): unknown {
   const d = args[0] != null ? new Date(args[0] as string | number) : new Date();
@@ -270,30 +220,206 @@ function jsonHelpers(fn: string, args: unknown[]): unknown {
   }
 }
 
-function resolveString(value: string, ctx: ExpressionContext): unknown {
-  const matches = [...value.matchAll(EXPR_RE)];
-  if (matches.length === 1 && matches[0][0] === value.trim()) {
-    // Whole string is a single expression -> preserve type.
-    return evalExpr(matches[0][1], ctx);
+function callHelper(namespace: string, fn: string, args: unknown[]): unknown {
+  switch (namespace) {
+    case 'date':
+      return dateHelpers(fn, args);
+    case 'string':
+      return stringHelpers(fn, args);
+    case 'math':
+      return mathHelpers(fn, args);
+    case 'random':
+      return randomHelpers(fn);
+    case 'hash':
+      return hashHelpers(fn, args);
+    case 'json':
+      return jsonHelpers(fn, args);
+    default:
+      return undefined;
   }
-  if (matches.length === 0) return value;
-  return value.replace(EXPR_RE, (_all, expr) => {
-    const resolved = evalExpr(expr, ctx);
-    return resolved === undefined || resolved === null
-      ? ''
-      : typeof resolved === 'string'
-        ? resolved
-        : JSON.stringify(resolved);
-  });
 }
 
-export function resolveExpressions<T>(value: T, ctx: ExpressionContext): T {
-  if (typeof value === 'string') return resolveString(value, ctx) as T;
-  if (Array.isArray(value)) return value.map((v) => resolveExpressions(v, ctx)) as unknown as T;
+/**
+ * Resolves `$node["Label"]` (or, if no label matches, by node id) by name
+ * lookup done OUTSIDE the isolate (plain JS object access), then hands
+ * the result in as a plain JSON-serializable value — no live references
+ * cross the isolate boundary.
+ */
+function resolveNode(ctx: ExpressionContext, name: string): { json: unknown; binary?: unknown } | undefined {
+  return ctx.nodesByLabel[name] ?? ctx.nodesById[name];
+}
+
+/**
+ * Evaluates a single `{{ ... }}` expression body as real JavaScript
+ * inside a fresh isolated-vm context. Throws a typed `ExpressionError` on
+ * timeout, out-of-memory, syntax error, sandbox security violation, or
+ * any runtime error the expression itself throws — callers attach this
+ * to the node's run result instead of silently resolving to `undefined`.
+ */
+async function evalExprSandboxed(expr: string, ctx: ExpressionContext): Promise<unknown> {
+  const isolate = new ivm.Isolate({ memoryLimit: EXPRESSION_MEMORY_LIMIT_MB });
+  try {
+    const context = await isolate.createContext();
+    const jail = context.global;
+    await jail.set('global', jail.derefInto());
+
+    // All context data is bridged in as JSON — no live object graph, no
+    // prototype access to the outer realm, matching n8n's
+    // expression-sandboxing.ts approach (block `with`, prototype access,
+    // `this`, reserved-name collisions) via isolation rather than by
+    // pattern-matching the input.
+    const dataJson = JSON.stringify({
+      json: ctx.json ?? null,
+      item: ctx.item ?? null,
+      env: ctx.env ?? {},
+      vars: ctx.vars ?? {},
+      staticData: ctx.staticData ?? {},
+      binary: ctx.binary ?? null,
+      workflow: ctx.workflow,
+      execution: ctx.execution,
+    });
+
+    await jail.set(
+      '__resolveNode',
+      new ivm.Reference((name: string) => {
+        const resolved = resolveNode(ctx, name);
+        return resolved === undefined ? 'null' : JSON.stringify(resolved);
+      })
+    );
+    await jail.set(
+      '__callHelper',
+      new ivm.Reference((namespace: string, fn: string, argsJson: string) => {
+        let args: unknown[] = [];
+        try {
+          args = JSON.parse(argsJson);
+        } catch {
+          // malformed args -> treat as empty
+        }
+        const result = callHelper(namespace, fn, args);
+        return JSON.stringify(result === undefined ? null : result);
+      })
+    );
+
+    const wrapped = `
+      (function() {
+        const __data = JSON.parse(${JSON.stringify(dataJson)});
+        const $json = __data.json;
+        const $item = __data.item;
+        const $env = __data.env;
+        const $vars = __data.vars;
+        const $staticData = __data.staticData;
+        const $binary = __data.binary;
+        const $workflow = __data.workflow;
+        const $execution = __data.execution;
+        const $now = new Date().toISOString();
+        const $today = new Date().toISOString().slice(0, 10);
+        const $node = new Proxy({}, {
+          get(_t, name) {
+            if (typeof name !== 'string') return undefined;
+            return JSON.parse(__resolveNode.applySync(undefined, [name]));
+          }
+        });
+        const $fn = new Proxy({}, {
+          get(_t, namespace) {
+            return new Proxy({}, {
+              get(_t2, fnName) {
+                return function(...args) {
+                  return JSON.parse(__callHelper.applySync(undefined, [namespace, fnName, JSON.stringify(args)]));
+                };
+              }
+            });
+          }
+        });
+        const result = (${expr}
+        );
+        return JSON.stringify(result === undefined ? null : result);
+      })()
+    `;
+
+    let script: ivm.Script;
+    try {
+      script = await isolate.compileScript(wrapped);
+    } catch (err) {
+      throw new ExpressionError('syntax', expr, err instanceof Error ? err.message : String(err));
+    }
+
+    let resultJson: string;
+    try {
+      resultJson = await script.run(context, { timeout: EXPRESSION_TIMEOUT_MS });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (/timed out/i.test(message)) throw new ExpressionError('timeout', expr, message);
+      if (/isolate is not able to allocate more memory|memory limit/i.test(message)) {
+        throw new ExpressionError('memory', expr, message);
+      }
+      if (/prototype|constructor\.constructor|with statement|reserved/i.test(message)) {
+        throw new ExpressionError('security', expr, message);
+      }
+      throw new ExpressionError('runtime', expr, message);
+    }
+
+    return JSON.parse(resultJson);
+  } finally {
+    isolate.dispose();
+  }
+}
+
+export interface ResolveOptions {
+  /** Collects `{ param, message, type }` for every expression that failed, instead of throwing on the first one. */
+  onError?: (err: { param: string; message: string; type: ExpressionErrorType }) => void;
+}
+
+async function resolveString(value: string, ctx: ExpressionContext, paramPath: string, opts?: ResolveOptions): Promise<unknown> {
+  const matches = [...value.matchAll(EXPR_RE)];
+  if (matches.length === 0) return value;
+
+  if (matches.length === 1 && matches[0][0] === value.trim()) {
+    // Whole string is a single expression -> preserve type.
+    try {
+      return await evalExprSandboxed(matches[0][1], ctx);
+    } catch (err) {
+      if (err instanceof ExpressionError) {
+        opts?.onError?.({ param: paramPath, message: err.message, type: err.type });
+        return undefined;
+      }
+      throw err;
+    }
+  }
+
+  // Template with surrounding text: resolve each block in turn, stringify
+  // and splice. Sequential (not Promise.all) — cost is dominated by
+  // isolate startup either way, and sequential keeps per-block error
+  // reporting simple and ordered.
+  let out = '';
+  let lastIndex = 0;
+  for (const m of matches) {
+    out += value.slice(lastIndex, m.index);
+    try {
+      const resolved = await evalExprSandboxed(m[1], ctx);
+      out += resolved === undefined || resolved === null ? '' : typeof resolved === 'string' ? resolved : JSON.stringify(resolved);
+    } catch (err) {
+      if (err instanceof ExpressionError) {
+        opts?.onError?.({ param: paramPath, message: err.message, type: err.type });
+        // leave this block blank; other blocks in the same template still resolve
+      } else {
+        throw err;
+      }
+    }
+    lastIndex = (m.index ?? 0) + m[0].length;
+  }
+  out += value.slice(lastIndex);
+  return out;
+}
+
+export async function resolveExpressions<T>(value: T, ctx: ExpressionContext, opts?: ResolveOptions, paramPath = ''): Promise<T> {
+  if (typeof value === 'string') return (await resolveString(value, ctx, paramPath, opts)) as T;
+  if (Array.isArray(value)) {
+    return (await Promise.all(value.map((v, i) => resolveExpressions(v, ctx, opts, `${paramPath}[${i}]`)))) as unknown as T;
+  }
   if (value && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = resolveExpressions(v, ctx);
+      out[k] = await resolveExpressions(v, ctx, opts, paramPath ? `${paramPath}.${k}` : k);
     }
     return out as T;
   }
