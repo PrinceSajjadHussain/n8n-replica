@@ -134,10 +134,13 @@ export default function NodeInspectPopover({
   label,
   snapshot,
   onClose,
+  onRetry,
 }: {
   label: string;
   snapshot: NodeRunSnapshot;
   onClose: () => void;
+  /** Re-runs the workflow starting at this node (reusing other nodes' cached output). Only rendered when the node failed. */
+  onRetry?: () => void;
 }) {
   const [tab, setTab] = useState<'input' | 'output'>('output');
   const [itemIndex, setItemIndex] = useState(0);
@@ -159,9 +162,23 @@ export default function NodeInspectPopover({
     >
       <div className="flex items-center justify-between px-3 py-2 border-b border-panelBorder">
         <p className="text-xs font-medium truncate">{label}</p>
-        <button onClick={onClose} className="focus-ring text-muted hover:text-ink text-xs leading-none px-1">
-          ✕
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          {snapshot.status === 'failed' && onRetry && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onRetry();
+              }}
+              title="Re-run the workflow starting at this node, reusing every other node's cached output"
+              className="focus-ring text-[10px] px-1.5 py-0.5 rounded border border-alert/40 text-alert hover:bg-alert/10"
+            >
+              ↻ Retry this node
+            </button>
+          )}
+          <button onClick={onClose} className="focus-ring text-muted hover:text-ink text-xs leading-none px-1">
+            ✕
+          </button>
+        </div>
       </div>
       <div className="flex items-center gap-3 px-3 pt-2 text-[11px] text-muted">
         {typeof snapshot.durationMs === 'number' && <span>{snapshot.durationMs} ms</span>}

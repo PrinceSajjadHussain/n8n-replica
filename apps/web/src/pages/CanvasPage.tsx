@@ -16,7 +16,6 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { io, type Socket } from 'socket.io-client';
-import { useExecutionStore } from '../store/executionStore';
 import { api } from '../lib/api';
 import { useAuthStore } from '../store/authStore';
 import FlowNode, { type FlowNodeData, type NodeStatus } from '../components/FlowNode';
@@ -39,6 +38,7 @@ import ExecutionScrubber, { type ExecutionSummary, type HistoryNodeRun } from '.
 import { getNodePorts, CONNECTION_TYPE_META, NodeConnectionTypes } from '../lib/connectionTypes';
 import { serializeEdgesForSave, deriveEdgesFromSaved } from '../lib/edgeSerialization';
 import { CanvasHandleAddContext, type HandleAddRequest } from '../lib/canvasHandleContext';
+import { NodeRetryContext } from '../lib/nodeRetryContext';
 
 const nodeTypes = { flowNode: FlowNode, stickyNote: StickyNoteNode, group: GroupNode };
 const edgeTypes = { default: PelletEdge };
@@ -68,6 +68,27 @@ function CanvasPageDesktop() {
   const [nodes, setNodes] = useState<Node<FlowNodeData>[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  /**
+   * Execution-lifecycle notifications (run started/finished/failed/cancelled,
+   * webhook fired, cancel/retry errors) are scoped to THIS canvas — rendered
+   * inside the canvas viewport itself, not the app-global <ToastViewport />.
+   * Using local component state (not the shared toastStore) means they're
+   * automatically gone the instant this page unmounts, so they can never
+   * leak onto the Workflows list or any other page after you navigate away.
+   */
+  const [canvasToasts, setCanvasToasts] = useState<
+    { id: string; message: string; variant: 'success' | 'error' | 'info' }[]
+  >([]);
+  const pushCanvasToast = useCallback(
+    (message: string, variant: 'success' | 'error' | 'info' = 'info', duration = 3500) => {
+      const id = `ctoast_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      setCanvasToasts((cur) => [...cur, { id, message, variant }]);
+      if (duration > 0) {
+        setTimeout(() => setCanvasToasts((cur) => cur.filter((t) => t.id !== id)), duration);
+      }
+    },
+    []
+  );
   const [credentials, setCredentials] = useState<
     { id: string; type: string; name?: string; lastTestOk?: boolean | null }[]
   >([]);
@@ -295,9 +316,9 @@ function CanvasPageDesktop() {
       setEdges((eds) => eds.map((edge) => ({ ...edge, animated: false, style: undefined })));
       setTimeout(() => setRunBanner(null), 4000);
       if (e.status === 'failed') {
-        toast.error('Execution failed');
+        pushCanvasToast('Execution failed', 'error');
       } else {
-        toast.success('Execution finished');
+        pushCanvasToast('Execution finished', 'success');
       }
     });
     socket.on('execution:cancelled', (e: any) => {
@@ -307,7 +328,7 @@ function CanvasPageDesktop() {
       setCancelling(false);
       setEdges((eds) => eds.map((edge) => ({ ...edge, animated: false, style: undefined })));
       setTimeout(() => setRunBanner(null), 4000);
-      toast.info('Execution cancelled');
+      pushCanvasToast('Execution cancelled', 'info');
     });
     // Previously dropped silently (no case existed for these two statuses
     // in the relay's old switch) — the canvas looked frozen on any
@@ -320,7 +341,7 @@ function CanvasPageDesktop() {
     socket.on('node:webhook-response', (e: any) => {
       if (e.workflowId !== workflowId) return;
       if (e.nodeId) setNodeStatus(e.nodeId, 'success' as NodeStatus, { lastRunOutput: e.output });
-      toast.info('Respond to Webhook node fired');
+      pushCanvasToast('Respond to Webhook node fired', 'info');
     });
 
     // Presence: viewer avatars + live cursor dots, scoped to this workflow's
@@ -847,9 +868,9 @@ function CanvasPageDesktop() {
       const res = await api.post(`/workflows/${workflowId}/execute`, {});
       setActiveExecutionId(res.data?.executionId ?? null);
       setRunBanner('Execution enqueued…');
-      toast.info('Run started');
+      pushCanvasToast('Run started', 'info');
     } catch (err: any) {
-      toast.error(err?.response?.data?.error ?? 'Failed to start run');
+      pushCanvasToast(err?.response?.data?.error ?? 'Failed to start run', 'error');
     }
   }
 
@@ -863,7 +884,31 @@ function CanvasPageDesktop() {
       // socket event (which also flips the banner/edges) to confirm it landed.
     } catch (err: any) {
       setCancelling(false);
-      toast.error(err?.response?.data?.error ?? 'Failed to cancel execution');
+      pushCanvasToast(err?.response?.data?.error ?? 'Failed to cancel execution', 'error');
+    }
+  }
+
+  /** "Retry this node" — reachable straight from a failed node's hover popover
+   *  (NodeInspectPopover), not just NodeConfigPanel. Re-runs the workflow
+   *  starting at nodeId, reusing every other node's cached output from the
+   *  active run if one is in flight, otherwise the most recent past execution. */
+  async function handleRetryNode(nodeId: string) {
+    if (!workflowId) return;
+    try {
+      let sourceExecutionId = activeExecutionId ?? undefined;
+      if (!sourceExecutionId) {
+        const { data } = await api.get(`/workflows/${workflowId}/executions`);
+        sourceExecutionId = data.executions?.[0]?.id;
+      }
+      if (!sourceExecutionId) {
+        pushCanvasToast('No past execution to retry from yet — run the whole workflow once first.', 'error');
+        return;
+      }
+      await api.post(`/executions/${sourceExecutionId}/retry-from/${nodeId}`);
+      const node = nodes.find((n) => n.id === nodeId);
+      pushCanvasToast(`Retrying from "${node?.data.label ?? 'node'}"…`, 'success');
+    } catch (err: any) {
+      pushCanvasToast(err?.response?.data?.error ?? 'Failed to retry from this node', 'error');
     }
   }
 
@@ -1113,12 +1158,42 @@ function CanvasPageDesktop() {
           <NodePalette onAdd={addNode} compatibleTypes={compatiblePaletteTypes} />
         </div>
         <div className="flex-1 min-w-0 relative" ref={canvasWrapperRef} onMouseMove={handleCanvasMouseMove}>
+          {canvasToasts.length > 0 && (
+            <div className="pointer-events-none absolute top-3 right-3 z-40 flex flex-col gap-2 w-72">
+              {canvasToasts.map((t) => (
+                <div
+                  key={t.id}
+                  role="status"
+                  className={`pointer-events-auto flex items-center gap-2 rounded-md border px-3 py-2 text-xs shadow-lg backdrop-blur-sm ${
+                    t.variant === 'error'
+                      ? 'border-alert/40 bg-alert/10 text-alert'
+                      : t.variant === 'success'
+                        ? 'border-signal/40 bg-signal/10 text-signal'
+                        : 'border-panelBorder bg-panel text-ink'
+                  }`}
+                >
+                  <span className="text-[13px] leading-none">
+                    {t.variant === 'error' ? '✕' : t.variant === 'success' ? '✓' : 'ℹ'}
+                  </span>
+                  <span className="flex-1 truncate">{t.message}</span>
+                  <button
+                    onClick={() => setCanvasToasts((cur) => cur.filter((c) => c.id !== t.id))}
+                    className="focus-ring ml-1 text-inherit opacity-60 hover:opacity-100 leading-none"
+                    aria-label="Dismiss notification"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           {historyOpen && workflowId && (
             <ExecutionScrubber workflowId={workflowId} onReplay={handleReplay} onExit={exitReplay} />
           )}
           <NodeDensityContext.Provider value={density}>
           <CredentialNamesContext.Provider value={credentialNames}>
           <CanvasHandleAddContext.Provider value={setPendingHandleRequest}>
+          <NodeRetryContext.Provider value={handleRetryNode}>
           <ReactFlow
             nodes={displayNodes}
             edges={edges}
@@ -1137,6 +1212,7 @@ function CanvasPageDesktop() {
             <Controls />
             <MiniMap pannable zoomable />
           </ReactFlow>
+          </NodeRetryContext.Provider>
           </CanvasHandleAddContext.Provider>
           </CredentialNamesContext.Provider>
           </NodeDensityContext.Provider>
@@ -1187,6 +1263,25 @@ function CanvasPageDesktop() {
             isWorkflowActive={isActive}
             lastRunOutput={selectedNode.data.lastRunOutput}
             lastRunInput={selectedNode.data.lastRunInput}
+            upstreamOutput={(() => {
+              const incoming = edges.filter((e) => e.target === selectedNode.id);
+              if (incoming.length === 0) return undefined;
+              // Mirror apps/worker/src/engine/executor.ts's real merge behavior:
+              // concatenate every connected upstream node's last output, not
+              // just the first one — so nodes with multiple inputs (merge,
+              // join, etc.) preview the same combined shape they'll actually
+              // receive at runtime.
+              const collected: unknown[] = [];
+              for (const e of incoming) {
+                const src = nodes.find((n) => n.id === e.source);
+                const out = src?.data.lastRunOutput;
+                if (out === undefined) continue;
+                if (Array.isArray(out)) collected.push(...out);
+                else collected.push(out);
+              }
+              if (collected.length === 0) return undefined;
+              return collected.length === 1 ? collected[0] : collected;
+            })()}
             onChange={updateSelectedNode}
             onDelete={deleteSelectedNode}
             onClose={() => setSelectedNodeId(null)}

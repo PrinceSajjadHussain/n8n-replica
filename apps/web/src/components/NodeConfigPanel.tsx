@@ -45,6 +45,8 @@ interface Props {
   lastRunOutput?: unknown;
   /** Last-run input for this node — used as $json mock context in ExpressionEditorInput live preview. */
   lastRunInput?: unknown;
+  /** Real recorded output of the node feeding into this one (if any), used to seed the Test Node mock input instead of an empty object. */
+  upstreamOutput?: unknown;
   onChange: (updates: {
     label?: string;
     params?: Record<string, unknown>;
@@ -91,6 +93,7 @@ export default function NodeConfigPanel({
   isWorkflowActive = false,
   lastRunOutput,
   lastRunInput,
+  upstreamOutput,
   onChange,
   onDelete,
   onClose,
@@ -109,7 +112,20 @@ export default function NodeConfigPanel({
   const [testInputMode, setTestInputMode] = useState<'single' | 'array'>(
     () => (sessionStorage.getItem(testModeStorageKey) as 'single' | 'array') || 'single'
   );
-  const [testInput, setTestInput] = useState(() => sessionStorage.getItem(testStorageKey) ?? '{}');
+  function defaultTestInput(): string {
+    const saved = sessionStorage.getItem(testStorageKey);
+    if (saved !== null) return saved;
+    if (upstreamOutput !== undefined) {
+      try {
+        return JSON.stringify(upstreamOutput, null, 2);
+      } catch {
+        // fall through
+      }
+    }
+    return '{}';
+  }
+
+  const [testInput, setTestInput] = useState(() => defaultTestInput());
   const [testBusy, setTestBusy] = useState(false);
   const [testResult, setTestResult] = useState<unknown>(undefined);
   const [testItems, setTestItems] = useState<Array<{ json: unknown; binary?: Record<string, { mimeType: string; fileName?: string; fileSize?: number }> }> | null>(null);
@@ -201,7 +217,7 @@ export default function NodeConfigPanel({
     setJsonError(null);
     setCredTestResult(null);
     setShowRawJson(!paramSchema);
-    setTestInput(sessionStorage.getItem(`session:${workflowId ?? 'wf'}:${nodeId}:testInput`) ?? '{}');
+    setTestInput(defaultTestInput());
     setTestInputMode((sessionStorage.getItem(`session:${workflowId ?? 'wf'}:${nodeId}:testMode`) as 'single' | 'array') || 'single');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodeId]);
@@ -590,9 +606,25 @@ export default function NodeConfigPanel({
               Array of items
             </label>
           </div>
-          <label className="block text-[10px] text-muted mb-1">
-            Mock input ({testInputMode === 'array' ? 'JSON array — one entry per item' : 'JSON object'})
-          </label>
+          <div className="flex items-center justify-between mb-1">
+            <label className="block text-[10px] text-muted">
+              Mock input ({testInputMode === 'array' ? 'JSON array — one entry per item' : 'JSON object'})
+            </label>
+            {upstreamOutput !== undefined && (
+              <button
+                type="button"
+                onClick={() => {
+                  const asString = JSON.stringify(upstreamOutput, null, 2);
+                  setTestInput(asString);
+                  setTestInputMode(asString.trim().startsWith('[') ? 'array' : 'single');
+                }}
+                title="Fill this box with the real last output of the connected node upstream"
+                className="focus-ring text-[10px] px-1.5 py-0.5 rounded border border-panelBorder text-muted hover:text-ink hover:border-signal/40"
+              >
+                ⤒ Pull from upstream node
+              </button>
+            )}
+          </div>
           <textarea
             value={testInput}
             onChange={(e) => setTestInput(e.target.value)}

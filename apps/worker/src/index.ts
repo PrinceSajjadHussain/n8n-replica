@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import './loadEnv';
 import { Worker } from 'bullmq';
 import type { QueueJobData, ExecutionJobData, ResumeJobData, TestNodeJobData, RetryJobData } from '@flowforge/shared-types';
 import { createRedisConnection, EXECUTION_QUEUE_NAME } from './queue';
@@ -12,6 +12,7 @@ import { reloadCommunityNodes } from './nodes/communityLoader';
 import { acquireSlot, releaseSlot } from './engine/concurrency';
 import { DelayedError } from 'bullmq';
 import { startRetentionSweeper } from './utils/retention';
+import { pool } from './db/pool';
 
 const connection = createRedisConnection();
 
@@ -128,6 +129,7 @@ const worker = new Worker<QueueJobData>(
   {
     connection,
     concurrency: Number(process.env.WORKER_CONCURRENCY ?? 5),
+    autorun: false, // held off until waitForDependencies() confirms DB/Redis are reachable
   }
 );
 
@@ -145,6 +147,56 @@ worker.on('failed', (job, err) => {
 // Periodically prunes old Execution/ExecutionNodeRun rows per
 // EXECUTION_RETENTION_DAYS (unset/0 = retention disabled, keep everything —
 // see apps/worker/src/utils/retention.ts for the query and scheduling).
-startRetentionSweeper();
+// Started only after the health check below confirms Postgres is reachable.
 
-console.log('FlowForge worker started, waiting for jobs...');
+/**
+ * Confirms Postgres and Redis are actually reachable before the worker
+ * starts pulling jobs off the queue. Without this, a misconfigured
+ * DATABASE_URL/REDIS_URL (e.g. env not loaded — see ./loadEnv) surfaces
+ * only when the first job fails deep inside a query, with a cryptic
+ * driver-level error (e.g. pg's SASL "password must be a string")
+ * instead of a clear, early, actionable message.
+ */
+async function waitForDependencies(maxAttempts = 10, delayMs = 3000): Promise<void> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let dbOk = false;
+    let redisOk = false;
+    try {
+      await pool.query('SELECT 1');
+      dbOk = true;
+    } catch (err) {
+      console.error(
+        `[worker] Postgres health check failed (attempt ${attempt}/${maxAttempts}): ${(err as Error).message}` +
+          (process.env.DATABASE_URL ? '' : ' — DATABASE_URL is not set at all, check your .env loading.')
+      );
+    }
+    try {
+      const pong = await connection.ping();
+      redisOk = pong === 'PONG';
+    } catch (err) {
+      console.error(`[worker] Redis health check failed (attempt ${attempt}/${maxAttempts}): ${(err as Error).message}`);
+    }
+    if (dbOk && redisOk) {
+      console.log('[worker] Postgres + Redis health checks passed.');
+      return;
+    }
+    if (attempt < maxAttempts) {
+      console.log(`[worker] Retrying health checks in ${delayMs}ms...`);
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  throw new Error(
+    'FlowForge worker could not reach Postgres and/or Redis after multiple attempts — refusing to start job processing. Check DATABASE_URL/REDIS_URL and that both services are running.'
+  );
+}
+
+waitForDependencies()
+  .then(() => {
+    worker.run().catch((err) => console.error('[worker] Worker run loop crashed:', err));
+    startRetentionSweeper();
+    console.log('FlowForge worker started, waiting for jobs...');
+  })
+  .catch((err) => {
+    console.error('[worker] Fatal startup error:', err.message);
+    process.exit(1);
+  });

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { NodeResizer, useReactFlow, useNodeConnections } from '@xyflow/react';
 import { getNodeTypeMeta } from '../lib/nodeTypeMeta';
 import { NODE_TYPE_TO_CREDENTIAL_TYPE } from '../lib/credentialSchemas';
@@ -8,6 +8,7 @@ import NodeIcon from './NodeIcon';
 import { useNodeDensity, useCredentialName } from '../lib/nodeDensity';
 import { getNodePorts, spreadOffsets, isNonMain, type NodePort } from '../lib/connectionTypes';
 import { useCanvasHandleAdd } from '../lib/canvasHandleContext';
+import { useNodeRetry } from '../lib/nodeRetryContext';
 import CanvasHandleMainInput from './handles/CanvasHandleMainInput';
 import CanvasHandleMainOutput from './handles/CanvasHandleMainOutput';
 import CanvasHandleNonMainInput from './handles/CanvasHandleNonMainInput';
@@ -82,12 +83,26 @@ export default function FlowNode({ id, data, selected }: { id: string; data: Flo
   const credentialMissing = requiresCredential && !data.credentialId;
   const credentialName = useCredentialName(data.credentialId as string | null | undefined);
   const [inspectOpen, setInspectOpen] = useState(false);
+  const [hoverPinned, setHoverPinned] = useState(false);
+  const hoverCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [noteOpen, setNoteOpen] = useState(false);
   const hasNote = typeof data.notes === 'string' && data.notes.trim().length > 0;
   const { updateNodeData } = useReactFlow();
   const incomingConnections = useNodeConnections({ id, handleType: 'target' });
   const requestAdd = useCanvasHandleAdd();
+  const retryNode = useNodeRetry();
   const hasRunData = status === 'running' || status === 'success' || status === 'failed';
+  const [liveElapsedMs, setLiveElapsedMs] = useState(0);
+  useEffect(() => {
+    if (status !== 'running') {
+      setLiveElapsedMs(0);
+      return;
+    }
+    const startedAt = Date.now();
+    setLiveElapsedMs(0);
+    const t = setInterval(() => setLiveElapsedMs(Date.now() - startedAt), 100);
+    return () => clearInterval(t);
+  }, [status]);
   const showRunBadge =
     (status === 'success' || status === 'failed') &&
     (typeof data.lastRunDurationMs === 'number' || typeof data.lastRunItemCount === 'number');
@@ -139,7 +154,24 @@ export default function FlowNode({ id, data, selected }: { id: string; data: Flo
         }`}
         style={widthStyle}
         title={isCompact ? data.label : undefined}
+        onMouseEnter={() => {
+          if (hoverCloseTimer.current) {
+            clearTimeout(hoverCloseTimer.current);
+            hoverCloseTimer.current = null;
+          }
+          if (hasRunData) setInspectOpen(true);
+        }}
+        onMouseLeave={() => {
+          if (hoverPinned) return;
+          hoverCloseTimer.current = setTimeout(() => setInspectOpen(false), 200);
+        }}
       >
+        {status === 'failed' && (
+          <span
+            title="This node errored on its last run — hover or click to inspect the error"
+            className="absolute -top-1.5 -right-1.5 w-3 h-3 rounded-full bg-alert border-2 border-panel animate-pulse z-10"
+          />
+        )}
         {resizable && (
           <NodeResizer
             isVisible={selected}
@@ -153,20 +185,37 @@ export default function FlowNode({ id, data, selected }: { id: string; data: Flo
           />
         )}
         {inspectOpen && (
-          <NodeInspectPopover
-            label={data.label}
-            snapshot={{
-              status: status,
-              input: data.lastRunInput,
-              output: data.lastRunOutput,
-              error: data.lastRunError,
-              durationMs: data.lastRunDurationMs,
-              itemCount: data.lastRunItemCount,
-              binary: data.lastRunBinary,
-              expressionErrors: data.lastRunExpressionErrors,
+          <div
+            onMouseEnter={() => {
+              if (hoverCloseTimer.current) {
+                clearTimeout(hoverCloseTimer.current);
+                hoverCloseTimer.current = null;
+              }
             }}
-            onClose={() => setInspectOpen(false)}
-          />
+            onMouseLeave={() => {
+              if (hoverPinned) return;
+              hoverCloseTimer.current = setTimeout(() => setInspectOpen(false), 200);
+            }}
+          >
+            <NodeInspectPopover
+              label={data.label}
+              snapshot={{
+                status: status,
+                input: data.lastRunInput,
+                output: data.lastRunOutput,
+                error: data.lastRunError,
+                durationMs: data.lastRunDurationMs,
+                itemCount: data.lastRunItemCount,
+                binary: data.lastRunBinary,
+                expressionErrors: data.lastRunExpressionErrors,
+              }}
+              onClose={() => {
+                setInspectOpen(false);
+                setHoverPinned(false);
+              }}
+              onRetry={() => retryNode(id)}
+            />
+          </div>
         )}
         {noteOpen && hasNote && (
           <NodeNotePopover notes={data.notes as string} onClose={() => setNoteOpen(false)} />
@@ -281,16 +330,20 @@ export default function FlowNode({ id, data, selected }: { id: string; data: Flo
           <button
             onClick={(e) => {
               e.stopPropagation();
-              setInspectOpen((v) => !v);
+              setHoverPinned((v) => {
+                const next = !v;
+                setInspectOpen(next || inspectOpen);
+                return next;
+              });
             }}
-            title="Inspect data"
+            title="Inspect data (also shown on hover)"
             className={`focus-ring mt-1 w-full text-[10px] px-1.5 py-0.5 rounded border text-left ${
               status === 'failed'
                 ? 'border-alert/40 text-alert bg-alert/10'
                 : 'border-panelBorder text-muted hover:text-ink hover:border-signal/40'
             }`}
           >
-            {status === 'running' && '⏳ running…'}
+            {status === 'running' && `⏳ ${(liveElapsedMs / 1000).toFixed(1)}s…`}
             {showRunBadge && (
               <>
                 {typeof data.lastRunDurationMs === 'number' && `${data.lastRunDurationMs}ms`}
