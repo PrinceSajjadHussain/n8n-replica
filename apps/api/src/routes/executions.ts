@@ -21,11 +21,22 @@ export const executionsRouter = Router();
 executionsRouter.use(requireAuth);
 
 executionsRouter.get('/:id', async (req: AuthedRequest, res) => {
-  // Join through Workflow to enforce ownership.
+  // Allow owner AND any WorkflowShare collaborator to fetch execution state.
+  // n8n audit section 10: execution data must be fetchable on-demand by any
+  // authorized viewer so a collaborator who missed the live socket push still
+  // sees correct state (not solely reliant on being in the right push room).
   const execResult = await pool.query(
     `SELECT e.* FROM "Execution" e
      JOIN "Workflow" w ON w.id = e."workflowId"
-     WHERE e.id = $1 AND w."userId" = $2`,
+     WHERE e.id = $1
+       AND (
+         w."userId" = $2
+         OR EXISTS (
+           SELECT 1 FROM "WorkflowShare" ws
+           WHERE ws."workflowId" = w.id
+             AND ws."sharedWithUserId" = $2
+         )
+       )`,
     [req.params.id, req.userId!]
   );
   const execution = execResult.rows[0];
@@ -50,10 +61,20 @@ executionsRouter.get('/:id', async (req: AuthedRequest, res) => {
  * cancel always eventually takes effect even under a dropped pub/sub message.
  */
 executionsRouter.post('/:id/cancel', async (req: AuthedRequest, res) => {
+  // Allow owner and editor/admin collaborators to cancel (viewers are read-only).
   const result = await pool.query(
     `SELECT e.id, e.status, e."workflowId" FROM "Execution" e
      JOIN "Workflow" w ON w.id = e."workflowId"
-     WHERE e.id = $1 AND w."userId" = $2`,
+     WHERE e.id = $1
+       AND (
+         w."userId" = $2
+         OR EXISTS (
+           SELECT 1 FROM "WorkflowShare" ws
+           WHERE ws."workflowId" = w.id
+             AND ws."sharedWithUserId" = $2
+             AND ws.role IN ('editor', 'admin')
+         )
+       )`,
     [req.params.id, req.userId!]
   );
   const execution = result.rows[0];
@@ -113,7 +134,15 @@ executionsRouter.post('/:id/retry-from/:nodeId', async (req: AuthedRequest, res)
  */
 executionsRouter.get('/workflow/:workflowId/stats', async (req: AuthedRequest, res) => {
   const ownsResult = await pool.query(
-    `SELECT id FROM "Workflow" WHERE id = $1 AND "userId" = $2`,
+    `SELECT id FROM "Workflow"
+     WHERE id = $1
+       AND (
+         "userId" = $2
+         OR EXISTS (
+           SELECT 1 FROM "WorkflowShare" ws
+           WHERE ws."workflowId" = id AND ws."sharedWithUserId" = $2
+         )
+       )`,
     [req.params.workflowId, req.userId!]
   );
   if (!ownsResult.rows[0]) return res.status(404).json({ error: 'Workflow not found' });

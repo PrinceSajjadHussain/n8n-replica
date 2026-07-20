@@ -211,10 +211,23 @@ export async function getExecutionForRetry(
 export async function getDecryptedCredentialById(
   credentialId: string
 ): Promise<Record<string, unknown> | null> {
-  const result = await pool.query(`SELECT "encryptedData" FROM "Credential" WHERE id = $1`, [
-    credentialId,
-  ]);
+  // Select oauth metadata alongside encryptedData so the refresh helper
+  // can decide whether to call grant_type=refresh_token transparently.
+  const result = await pool.query(
+    `SELECT "encryptedData", "authType", "oauthProvider", "oauthExpiresAt"
+       FROM "Credential" WHERE id = $1`,
+    [credentialId]
+  );
   const row = result.rows[0];
   if (!row) return null;
-  return JSON.parse(decrypt(row.encryptedData));
+  const data = JSON.parse(decrypt(row.encryptedData)) as Record<string, unknown>;
+  // Refresh the access token if it's within 60s of expiry — transparent to
+  // every node/caller; same "define once, share" approach as n8n's
+  // OAuth2Api base credential type (audit section 16).
+  const { refreshOAuthTokenIfNeeded } = await import('./oauthRefresh');
+  return refreshOAuthTokenIfNeeded(credentialId, data, {
+    authType: row.authType ?? null,
+    oauthProvider: row.oauthProvider ?? null,
+    oauthExpiresAt: row.oauthExpiresAt ?? null,
+  });
 }

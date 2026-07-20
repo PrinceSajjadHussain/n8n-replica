@@ -7,6 +7,7 @@ import CredentialQuickCreateModal from './CredentialQuickCreateModal';
 import SwitchCasesEditor from './SwitchCasesEditor';
 import IfConditionsEditor from './IfConditionsEditor';
 import ParamForm from './Paramform';
+import SchemaTreeView from './SchemaTreeView';
 import { getParamSchema } from '../lib/paramSchemas';
 import { getNodeTypeMeta } from '../lib/nodeTypeMeta';
 import { CREDENTIAL_TYPE_META, NODE_TYPE_TO_CREDENTIAL_TYPE, type CredentialType } from '../lib/credentialSchemas';
@@ -40,6 +41,10 @@ interface Props {
   hasRespondToWebhookNode?: boolean;
   /** Whether the workflow is currently published/active — webhook and chat trigger URL previews use the `/test/...` path while unpublished, matching the API's test/production route split. */
   isWorkflowActive?: boolean;
+  /** Last-run output for this node — drives SchemaTreeView for drag-to-insert field references. */
+  lastRunOutput?: unknown;
+  /** Last-run input for this node — used as $json mock context in ExpressionEditorInput live preview. */
+  lastRunInput?: unknown;
   onChange: (updates: {
     label?: string;
     params?: Record<string, unknown>;
@@ -84,11 +89,14 @@ export default function NodeConfigPanel({
   siblingChatPaths = [],
   hasRespondToWebhookNode = false,
   isWorkflowActive = false,
+  lastRunOutput,
+  lastRunInput,
   onChange,
   onDelete,
   onClose,
 }: Props) {
   const [showCredentialModal, setShowCredentialModal] = useState(false);
+  const [schemaOpen, setSchemaOpen] = useState(false);
   const requiredCredentialType = NODE_TYPE_TO_CREDENTIAL_TYPE[nodeType] as CredentialType | undefined;
   const [localLabel, setLocalLabel] = useState(label);
   const [localNotes, setLocalNotes] = useState(notes ?? '');
@@ -475,19 +483,57 @@ export default function NodeConfigPanel({
           )}
 
           {paramSchema && paramSchema.fields.length > 0 && !showRawJson && (
-            <ParamForm
-              nodeType={nodeType}
-              schema={paramSchema}
-              params={params}
-              onChange={handleFormChange}
-              accentColor={nodeMeta.color}
-              extraSuggestions={nodeSuggestions}
-              workflowId={workflowId}
-              siblingWebhookPaths={siblingWebhookPaths}
-              siblingChatPaths={siblingChatPaths}
-              hasRespondToWebhookNode={hasRespondToWebhookNode}
-              isWorkflowActive={isWorkflowActive}
-            />
+            <>
+              {lastRunOutput && (
+                <div className="border border-panelBorder rounded-md overflow-hidden mb-2">
+                  <button
+                    type="button"
+                    onClick={() => setSchemaOpen((v) => !v)}
+                    className="focus-ring w-full flex items-center justify-between px-2 py-1.5 text-[10px] uppercase tracking-widest text-muted hover:text-ink bg-canvas"
+                  >
+                    <span>↗ Output schema — drag to insert</span>
+                    <span>{schemaOpen ? '▾' : '▸'}</span>
+                  </button>
+                  {schemaOpen && (
+                    <SchemaTreeView
+                      nodeLabel={label}
+                      output={lastRunOutput}
+                      onInsert={(expr) => {
+                        // Insert the expression into the focused input if possible,
+                        // otherwise copy to clipboard as fallback.
+                        const active = document.activeElement as HTMLTextAreaElement | HTMLInputElement | null;
+                        if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT')) {
+                          const start = active.selectionStart ?? active.value.length;
+                          const end = active.selectionEnd ?? active.value.length;
+                          const next = active.value.slice(0, start) + expr + active.value.slice(end);
+                          const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set
+                            ?? Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                          nativeInputValueSetter?.call(active, next);
+                          active.dispatchEvent(new Event('input', { bubbles: true }));
+                        } else {
+                          navigator.clipboard.writeText(expr).catch(() => {});
+                        }
+                      }}
+                    />
+                  )}
+                </div>
+              )}
+              <ParamForm
+                nodeType={nodeType}
+                schema={paramSchema}
+                params={params}
+                onChange={handleFormChange}
+                accentColor={nodeMeta.color}
+                extraSuggestions={nodeSuggestions}
+                mockInput={lastRunInput}
+                credentialId={credentialId}
+                workflowId={workflowId}
+                siblingWebhookPaths={siblingWebhookPaths}
+                siblingChatPaths={siblingChatPaths}
+                hasRespondToWebhookNode={hasRespondToWebhookNode}
+                isWorkflowActive={isWorkflowActive}
+              />
+            </>
           )}
 
           {(!paramSchema || showRawJson) && (

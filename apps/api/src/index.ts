@@ -29,6 +29,7 @@ import { tagsRouter } from './routes/tags';
 import { logStreamsRouter } from './routes/logStreams';
 import { queueAdminRouter } from './routes/queueAdmin';
 import { billingRouter, billingWebhookRouter } from './routes/billing';
+import { expressionsRouter } from './routes/expressions';
 import { pool } from './db/pool';
 import { createRedisConnection } from './queue/queue';
 import { reconcileAllWorkflowPollersOnBoot } from './utils/triggerActivation';
@@ -98,6 +99,7 @@ app.use('/data-tables', dataTablesRouter);
 app.use('/tags', tagsRouter);
 app.use('/queue', queueAdminRouter);
 app.use('/billing', billingRouter);
+app.use('/expressions', expressionsRouter);
 
 const httpServer = createServer(app);
 initRealtime(httpServer);

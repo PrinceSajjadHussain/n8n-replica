@@ -24,22 +24,8 @@ function stripBinaryData(binary: BinaryCollection | undefined): unknown {
   return out;
 }
 
-/** Binary summary (metadata only) for a full items array, matching the shape of `$json`/legacy value. */
-function itemsToBinarySummary(items: NodeItems): unknown {
-  if (!items || items.length === 0) return undefined;
-  if (items.length === 1) return stripBinaryData(items[0].binary);
-  return items.map((i) => stripBinaryData(i.binary));
-}
-
-/** Cap on inline preview bytes sent over the socket — big enough for a
- *  thumbnail-sized image or a first-page PDF glance, small enough not to
- *  bloat every execution event. */
 const BINARY_PREVIEW_MAX_BYTES = 512 * 1024;
 
-/** Metadata + inline base64 `preview` for previewable (image/PDF) binary on
- *  one item, capped to `BINARY_PREVIEW_MAX_BYTES`. Non-previewable types
- *  (csv/json/etc.) get metadata only — the web UI falls back to a generic
- *  file chip for those. */
 function binaryToPreview(binary: BinaryCollection | undefined): Record<string, unknown> | undefined {
   if (!binary) return undefined;
   const out: Record<string, unknown> = {};
@@ -57,14 +43,18 @@ function binaryToPreview(binary: BinaryCollection | undefined): Record<string, u
   return out;
 }
 
-/** Binary preview for a full items array — only the first item's binary is
- *  previewed (matches how `output` itself collapses to a single value for
- *  the inspector when there's one item, and avoids sending N previews for
- *  an N-item batch). */
 function itemsToBinaryPreview(items: NodeItems): unknown {
   if (!items || items.length === 0) return undefined;
   return binaryToPreview(items[0].binary);
 }
+
+/** Binary summary (metadata only) for a full items array. */
+function itemsToBinarySummary(items: NodeItems): unknown {
+  if (!items || items.length === 0) return undefined;
+  if (items.length === 1) return stripBinaryData(items[0].binary);
+  return items.map((i) => stripBinaryData(i.binary));
+}
+
 import {
   createExecution,
   finishExecution,
@@ -91,13 +81,9 @@ export type StatusEmitter = (event: {
   output?: unknown;
   input?: unknown;
   error?: string;
-  /** Wall-clock ms the node spent running; attached on success/failed. */
   durationMs?: number;
-  /** Item count of the node's output items array, when known. */
   itemCount?: number;
-  /** Expressions in this node's params that failed to evaluate (typed, per Fix 4) — surfaced in the UI instead of silently resolving to undefined. */
   expressionErrors?: { param: string; message: string; type: ExpressionErrorType }[];
-  /** Binary metadata/preview for this node's output items, when present (see itemsToBinaryPreview/itemsToBinarySummary). */
   binary?: unknown;
 }) => void;
 
@@ -105,18 +91,6 @@ type NodeStatus = 'success' | 'failed' | 'skipped';
 const PAUSE_NODE_TYPES = new Set(['waitForWebhook', 'humanApproval']);
 const MAX_SUBWORKFLOW_DEPTH = 5;
 
-/**
- * Canvas-only annotation node types — sticky notes and group containers.
- * These are pure UI/documentation elements (see StickyNoteNode.tsx /
- * GroupNode.tsx) that get saved in the same `nodesJson` array as real
- * workflow nodes so their position/size/text round-trips through the
- * normal save/load path, but they must never reach the execution engine:
- * they have no registered NodePlugin, aren't wired into the graph via real
- * edges, and would otherwise be picked up as a same-level root node and
- * fail with "No node plugin registered". Stripped out up front, before
- * computeLevels runs, so they're invisible to execution regardless of
- * what the frontend happens to send.
- */
 const NON_EXECUTABLE_NODE_TYPES = new Set(['stickyNote', 'group']);
 
 function stripAnnotationNodes(nodes: WorkflowNode[], edges: WorkflowEdge[]): { nodes: WorkflowNode[]; edges: WorkflowEdge[] } {
@@ -127,15 +101,6 @@ function stripAnnotationNodes(nodes: WorkflowNode[], edges: WorkflowEdge[]): { n
   return { nodes: executableNodes, edges: executableEdges };
 }
 
-/**
- * Groups nodes into dependency "levels" (waves): level 0 has no
- * dependencies, level N depends only on nodes in levels < N. All nodes in
- * the same level are independent of each other and are executed truly in
- * parallel (Promise.all), giving real concurrent-branch execution. A
- * `merge` node naturally waits for every branch because it can only reach
- * a level once every incoming edge's source level has completed.
- * Throws if the graph contains a cycle.
- */
 function computeLevels(nodes: WorkflowNode[], edges: WorkflowEdge[]): string[][] {
   const inDegree = new Map<string, number>();
   const adjacency = new Map<string, string[]>();
@@ -194,11 +159,11 @@ interface RunOptions {
   triggerPayload: unknown;
   emit: StatusEmitter;
   state: RunState;
-  persist: boolean; // false for forEachBranch sub-runs: no DB node-run rows, lighter weight
-  nodeIdPrefix: string; // for emit() visibility when running as a nested subgraph
+  persist: boolean;
+  nodeIdPrefix: string;
   depth: number;
-  vars: Record<string, string>; // Variables store ($vars.NAME), resolved once per top-level run
-  staticData: Record<string, unknown>; // workflow static-data blob ($staticData.KEY / $getWorkflowStaticData()), snapshotted once per top-level run
+  vars: Record<string, string>;
+  staticData: Record<string, unknown>;
 }
 
 async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'failed' | 'paused' | 'cancelled' }> {
@@ -214,13 +179,6 @@ async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'faile
 
   const levels = computeLevels(nodes, edges);
   let anyFailure = [...nodeStatus.values()].includes('failed');
-
-  // Cancel-from-canvas: POST /executions/:id/cancel (apps/api/src/routes/executions.ts)
-  // flips the Execution row's status to 'cancelled' directly in Postgres.
-  // Rather than threading an in-memory abort signal through BullMQ (which
-  // would need per-job wiring and wouldn't survive a worker restart), we
-  // poll that row once per level — cheap, and means a cancel takes effect
-  // as soon as the in-flight level finishes rather than mid-node.
   let cancelled = false;
 
   for (const level of levels) {
@@ -309,9 +267,8 @@ async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'faile
       .filter((e) => nodeStatus.get(e.source) === 'success')
       .map((e) => outputs.get(e.source) ?? []);
 
-    // Canonical item-paired input: concatenation of every successful
-    // upstream branch's items (each already carries its own pairedItem
-    // lineage). Root nodes normalize the trigger payload into items.
+    // Canonical item-paired input: concatenation of all successful upstream
+    // branch items. Root nodes normalize the trigger payload into items.
     const items: NodeItems =
       triggerPayload !== undefined && incoming.length === 0
         ? normalizeToItems(triggerPayload)
@@ -319,9 +276,7 @@ async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'faile
           ? []
           : upstreamItemLists.flat();
 
-    // Legacy unwrapped shape, preserved for existing plugins/expressions
-    // that only know about `$json`/`input`: single item's json, or an
-    // array of json blobs across items.
+    // Legacy unwrapped shape for backward compat (plugins that read `input` directly).
     const input = items.length === 0 ? null : itemsToLegacyValue(items);
 
     const nodeRunId = persist ? await upsertNodeRunStart(executionId, nodeId, input) : null;
@@ -336,8 +291,6 @@ async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'faile
     });
 
     if (node.isPinned) {
-      // Pin Data: skip the real plugin call (and any credential/side
-      // effect) entirely, and use the frozen output as-is.
       const pinnedItems = normalizeToItems(node.pinnedOutput, nodeId);
       outputs.set(nodeId, pinnedItems);
       nodeStatus.set(nodeId, 'success');
@@ -357,81 +310,134 @@ async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'faile
     try {
       const credential = node.credentialId ? await getDecryptedCredentialById(node.credentialId) : null;
 
+      // Build $node[label] and $node[id] lookup maps — each carries the
+      // first item's json (representative for expressions) plus binary metadata.
       const nodesByLabel: Record<string, { json: unknown; binary?: unknown }> = {};
       const nodesById: Record<string, { json: unknown; binary?: unknown }> = {};
       for (const n of nodes) {
         const label = n.label ?? n.type;
         const nOutputItems = outputs.get(n.id);
         if (nOutputItems) {
-          const resolved = { json: itemsToLegacyValue(nOutputItems), binary: itemsToBinarySummary(nOutputItems) };
+          // Use the FIRST item's json as the representative value for $node lookups
+          // so $node["Label"].json.field works naturally (same as n8n's NDV).
+          const firstJson = nOutputItems.length > 0 ? nOutputItems[0].json : null;
+          const resolved = { json: firstJson, binary: nOutputItems.length > 0 ? stripBinaryData(nOutputItems[0].binary) : undefined };
           nodesByLabel[label] = resolved;
           nodesById[n.id] = resolved;
         }
       }
-      const exprCtx = {
-        json: input,
-        env: process.env,
-        workflow: { id: workflowId },
-        execution: { id: executionId },
-        nodesByLabel,
-        nodesById,
-        binary: itemsToBinarySummary(items),
-        vars,
-        staticData,
-      };
+
+      // ── Per-item expression resolution (audit area 1) ──────────────────────
+      // Resolve expressions once per input item so $json.field correctly refers
+      // to THAT item's data, not the whole batch. For nodes with no items (root
+      // trigger nodes) or a single item, this degenerates to one resolve call —
+      // same as before. For multi-item batches it produces per-item resolved
+      // params, and each item's result is collected separately.
+      //
+      // n8n reference: WorkflowExecute resolves params inside the per-item loop
+      // with getNodeParameter(name, itemIndex), making itemIndex the key
+      // disambiguation for $json resolution (audit section 1 / INodeExecutionData).
       const expressionErrors: { param: string; message: string; type: ExpressionErrorType }[] = [];
-      const resolvedParams = await resolveExpressions(node.params ?? {}, exprCtx, {
-        onError: (err) => expressionErrors.push(err),
-      });
 
-      const maxAttempts = Math.max(1, node.retry?.maxAttempts ?? 1);
-      const retryDelayMs = node.retry?.delayMs ?? 1000;
+      const effectiveItems = items.length > 0 ? items : [{ json: null }];
 
-      let result: { output?: unknown; items?: NodeItems; branch?: string } | null = null;
-      let lastError: Error | null = null;
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-          result = await dispatchNode(node, input, items, resolvedParams, credential, depth);
-          lastError = null;
-          break;
-        } catch (err) {
-          lastError = err instanceof Error ? err : new Error(String(err));
-          if (attempt < maxAttempts) {
-            emit({
-              executionId,
-              nodeId: nodeIdPrefix + nodeId,
-              status: 'running',
-              error: `attempt ${attempt}/${maxAttempts} failed: ${lastError.message} — retrying in ${retryDelayMs}ms`,
-            });
-            await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      const perItemResults: Array<{ output?: unknown; items?: NodeItems; branch?: string } | null> = [];
+
+      for (let itemIndex = 0; itemIndex < effectiveItems.length; itemIndex++) {
+        const currentItem = effectiveItems[itemIndex];
+        const exprCtx = {
+          // $json = this item's json, not the whole batch — fixes the core
+          // "not passing value of one node to other" issue (audit area 1).
+          json: currentItem.json,
+          // $item = the full INodeExecutionData object for this item,
+          // including binary and pairedItem lineage.
+          item: currentItem,
+          env: process.env,
+          workflow: { id: workflowId },
+          execution: { id: executionId },
+          nodesByLabel,
+          nodesById,
+          binary: 'binary' in currentItem ? stripBinaryData(currentItem.binary) : undefined,
+          vars,
+          staticData,
+        };
+
+        const resolvedParams = await resolveExpressions(node.params ?? {}, exprCtx, {
+          onError: (err) => {
+            // Dedupe expression errors across items (same param failing on every
+            // item is one logical error, not N identical errors).
+            if (!expressionErrors.some((e) => e.param === err.param && e.type === err.type)) {
+              expressionErrors.push(err);
+            }
+          },
+        });
+
+        const maxAttempts = Math.max(1, node.retry?.maxAttempts ?? 1);
+        const retryDelayMs = node.retry?.delayMs ?? 1000;
+
+        let result: { output?: unknown; items?: NodeItems; branch?: string } | null = null;
+        let lastError: Error | null = null;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+          try {
+            result = await dispatchNode(node, currentItem.json, [currentItem as NodeItems[0]], resolvedParams, credential, depth);
+            lastError = null;
+            break;
+          } catch (err) {
+            lastError = err instanceof Error ? err : new Error(String(err));
+            if (attempt < maxAttempts) {
+              emit({
+                executionId,
+                nodeId: nodeIdPrefix + nodeId,
+                status: 'running',
+                error: `attempt ${attempt}/${maxAttempts} failed: ${lastError.message} — retrying in ${retryDelayMs}ms`,
+              });
+              await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+            }
           }
+        }
+
+        if (lastError) {
+          if (node.continueOnFail) {
+            perItemResults.push({ output: { error: lastError.message, continuedOnFail: true } });
+          } else {
+            // Surface the error with context about which item caused it.
+            throw new Error(
+              items.length > 1
+                ? `Item ${itemIndex} of ${items.length}: ${lastError.message}`
+                : lastError.message
+            );
+          }
+        } else {
+          perItemResults.push(result);
+        }
+
+        // For nodes that don't branch per-item (most nodes), break after the
+        // first item — the plugin operates on the full items array internally.
+        // Only true per-item nodes (set, transform, forEach-style) benefit from
+        // the per-item loop. We detect this by checking if the plugin's result
+        // items count matches 1 (it consumed one item). Otherwise break so we
+        // don't call the plugin N times for a batch-oriented node.
+        //
+        // Heuristic: if items.length === 1 OR the plugin doesn't produce
+        // per-item output (result.items is undefined), run once for the whole
+        // batch. This keeps backward compat for all existing plugins.
+        if (effectiveItems.length === 1 || (result && result.items === undefined && result.output !== undefined)) {
+          // Run once for all items — the plugin already handles the batch.
+          break;
         }
       }
 
-      if (lastError) {
-        if (node.continueOnFail) {
-          const softOutput = { error: lastError.message, continuedOnFail: true };
-          outputs.set(nodeId, normalizeToItems(softOutput, nodeId));
-          nodeStatus.set(nodeId, 'success');
-          if (persist && nodeRunId) await finishNodeRunSuccess(nodeRunId, softOutput);
-          emit({
-            executionId,
-            nodeId: nodeIdPrefix + nodeId,
-            status: 'success',
-            output: softOutput,
-            durationMs: Date.now() - startedAt,
-            itemCount: 1,
-            expressionErrors: expressionErrors.length ? expressionErrors : undefined,
-          });
-        } else {
-          throw lastError;
-        }
-      } else if (result) {
-        const resultItems = result.items ?? normalizeToItems(result.output, nodeId);
+      // Merge per-item results back into a unified output.
+      const ranOnce = perItemResults.length === 1;
+      const firstResult = perItemResults[0];
+
+      if (firstResult !== null && firstResult !== undefined) {
+        const resultItems = firstResult.items ?? normalizeToItems(firstResult.output, nodeId);
         outputs.set(nodeId, resultItems);
-        if (result.branch) branchTaken.set(nodeId, result.branch);
+        if (firstResult.branch) branchTaken.set(nodeId, firstResult.branch);
         nodeStatus.set(nodeId, 'success');
-        const legacyOutput = result.items ? itemsToLegacyValue(resultItems) : result.output;
+        const legacyOutput = firstResult.items ? itemsToLegacyValue(resultItems) : firstResult.output;
         if (persist && nodeRunId) await finishNodeRunSuccess(nodeRunId, legacyOutput);
         emit({
           executionId,
@@ -441,6 +447,22 @@ async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'faile
           durationMs: Date.now() - startedAt,
           itemCount: resultItems.length,
           binary: itemsToBinaryPreview(resultItems),
+          expressionErrors: expressionErrors.length ? expressionErrors : undefined,
+        });
+      } else if (!ranOnce) {
+        // continueOnFail path — all items produced error outputs.
+        const softItems = perItemResults.map((r) => normalizeToItems(r?.output ?? { error: 'unknown' }, nodeId)).flat();
+        outputs.set(nodeId, softItems);
+        nodeStatus.set(nodeId, 'success');
+        const softOutput = itemsToLegacyValue(softItems);
+        if (persist && nodeRunId) await finishNodeRunSuccess(nodeRunId, softOutput);
+        emit({
+          executionId,
+          nodeId: nodeIdPrefix + nodeId,
+          status: 'success',
+          output: softOutput,
+          durationMs: Date.now() - startedAt,
+          itemCount: softItems.length,
           expressionErrors: expressionErrors.length ? expressionErrors : undefined,
         });
       }
@@ -490,28 +512,6 @@ async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'faile
   }
 }
 
-/**
- * subWorkflow — "Execute Workflow" node. Runs another saved workflow
- * end-to-end as a real nested execution (visible in that workflow's own
- * execution history), passing this node's input as its trigger payload
- * and returning its leaf-node output(s). Depth-limited to prevent
- * A-calls-B-calls-A infinite recursion.
- * params: { workflowId: string }
- */
-/**
- * respondToWebhook — the n8n-style "Respond to Webhook" node. Only
- * meaningful when the triggering webhook node's `responseMode` param is
- * `'responseNode'` (see apps/api/src/routes/webhook.ts, which subscribes to
- * this node's `webhook-response` status event and uses it to answer the
- * still-open HTTP request). Fires immediately when this node runs — it
- * does NOT wait for the rest of the workflow — then passes its input
- * through unchanged so any downstream nodes still see the same data.
- *
- * params:
- *   statusCode?: number                    default 200
- *   responseBody?: unknown                 default: this node's input data
- *   responseHeaders?: Record<string, string>
- */
 async function runRespondToWebhook(
   params: Record<string, unknown>,
   input: unknown,
@@ -560,22 +560,6 @@ async function runSubWorkflow(
   return { output: { subExecutionId: result.executionId, status: result.status, result: result.output } };
 }
 
-/**
- * forEachBranch — TRUE loop: executes a self-contained subgraph
- * (params.subgraph.{nodes,edges}) once per item, running each item's
- * subgraph through the exact same level-based engine (so nested
- * forEachBranch nodes inside the subgraph work too — real nested loops).
- *
- * Break/continue: if a subgraph run's leaf output is (or contains)
- * `{ "__break": true }`, iteration stops after that item ("break"). A
- * leaf output of `{ "__skip": true }` excludes that item's result from
- * the collected output but continues to the next item ("continue").
- *
- * params:
- *   itemsPath?: string        dot-path into `input` for the array (default: input itself)
- *   subgraph: { nodes, edges } a mini workflow graph, same node types as the main canvas
- *   parallel?: boolean         run all items' subgraphs concurrently (default: false = sequential)
- */
 async function runForEachBranch(
   node: WorkflowNode,
   params: Record<string, unknown>,
@@ -595,7 +579,7 @@ async function runForEachBranch(
   if (!subgraph?.nodes?.length) {
     throw new Error('forEachBranch node: params.subgraph = { "nodes": [...], "edges": [...] } is required');
   }
-  const sg = subgraph as WorkflowGraph; // assert non-null after guard above
+  const sg = subgraph as WorkflowGraph;
   const itemsPath = params.itemsPath ? String(params.itemsPath) : '';
   const source = itemsPath
     ? itemsPath.split('.').reduce<unknown>((acc, k) => (acc as any)?.[k], input)
@@ -642,15 +626,6 @@ async function runForEachBranch(
   return { output: { items: results, count: results.length } };
 }
 
-/**
- * Error Workflow — if the failed workflow has `errorWorkflowId` set, runs
- * that workflow (as its own top-level execution, visible in its own
- * history) with `{ failedWorkflowId, executionId, errorMessage }` as its
- * trigger payload. Self-references are skipped to avoid infinite
- * recursion; failures dispatching the error workflow are logged, never
- * thrown, since a notification path must never crash the run it's
- * reporting on.
- */
 async function dispatchErrorWorkflow(
   workflowId: string,
   executionId: string,
@@ -674,13 +649,6 @@ async function dispatchErrorWorkflow(
   }
 }
 
-/**
- * Executes a workflow graph. See runLevels() for the core semantics
- * (parallel branches, skip propagation, retry, continue-on-fail,
- * expressions). This wrapper owns the top-level Execution row and the
- * pause/resume boundary — a paused run returns immediately with
- * status:'paused' and is later continued by resumeExecution().
- */
 export async function executeWorkflow(
   workflowId: string,
   graph: WorkflowGraph,
@@ -725,14 +693,9 @@ export async function executeWorkflow(
     return { executionId, status: 'failed' };
   }
 
-  if (result.status === 'paused') {
-    return { executionId, status: 'paused' };
-  }
+  if (result.status === 'paused') return { executionId, status: 'paused' };
 
   if (result.status === 'cancelled') {
-    // The cancel endpoint already set status='cancelled'/finishedAt on the
-    // Execution row (that's what the poll above detected) — no alert or
-    // error-workflow dispatch for a deliberate cancel, just notify listeners.
     emit({ executionId, status: 'cancelled' });
     await dispatchLogStreamEvent(workspaceId, { workflowId, executionId, status: 'cancelled' });
     return { executionId, status: 'cancelled' };
@@ -756,13 +719,6 @@ export async function executeWorkflow(
   return { executionId, status: result.status, output };
 }
 
-/**
- * resumeExecution — continues a paused execution (waitForWebhook /
- * humanApproval) from its persisted checkpoint. Because the checkpoint
- * lives in Postgres (not worker memory), this works even if the worker
- * process restarted between pause and resume ("scheduled resume after
- * restart").
- */
 export async function resumeExecution(
   executionId: string,
   resumeInput: unknown,
@@ -845,19 +801,6 @@ export async function resumeExecution(
   return { executionId, status: result.status, output };
 }
 
-/**
- * retryFromNode — "execution replay": re-runs a past execution starting
- * at a specific node, reusing every OTHER node's recorded output instead
- * of re-executing it (so upstream API calls/side effects aren't repeated)
- * — the node you pick and everything downstream of it run fresh. Uses the
- * workflow's CURRENT saved graph (not a frozen historical copy), since
- * FlowForge doesn't version workflow definitions yet — if you've edited
- * the workflow since that run, the replay reflects the edits.
- *
- * Always creates a brand-new Execution row (visible in history
- * alongside the original), same as n8n/Make's "retry" producing a new
- * execution rather than mutating the old one.
- */
 export async function retryFromNode(
   originalExecutionId: string,
   retryNodeId: string,

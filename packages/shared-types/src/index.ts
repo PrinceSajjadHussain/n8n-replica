@@ -282,3 +282,9 @@ export interface ExecutionStatusEvent {
 // Data Table column types (25-type catalog) — see columnTypes.ts for detail.
 // ---------------------------------------------------------------------------
 export * from './columnTypes';
+
+// ---------------------------------------------------------------------------
+// OAuth2 token provider config — single source of truth for tokenUrl/envs
+// shared between apps/api (authorize flow) and apps/worker (refresh helper).
+// ---------------------------------------------------------------------------
+export * from './oauthTokenProviders';

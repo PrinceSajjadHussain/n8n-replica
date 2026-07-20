@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
 import ExpressionAutocomplete, { type ExpressionSuggestion } from './ExpressionAutocomplete';
+import ExpressionEditorInput from './ExpressionEditorInput';
+import ResourceLocatorInput from './ResourceLocatorInput';
 import type { ParamField, ParamSchema } from '../lib/paramSchemas';
 import { describeCron, isValidCron, nextRuns } from '../lib/cronUtils';
 
@@ -10,6 +12,10 @@ interface Props {
   onChange: (params: Record<string, unknown>) => void;
   accentColor: string;
   extraSuggestions?: ExpressionSuggestion[];
+  /** Last-run input for the current node — passed to ExpressionEditorInput as $json mock context for live preview. */
+  mockInput?: unknown;
+  /** Current credential id — used by ResourceLocatorInput to fetch resource lists. */
+  credentialId?: string | null;
   workflowId?: string;
   /** params.path values of every other webhook node in this workflow, for the duplicate-path warning. */
   siblingWebhookPaths?: string[];
@@ -37,11 +43,17 @@ function FieldControl({
   params,
   onChange,
   extraSuggestions,
+  mockInput,
+  credentialId,
+  nodeType,
 }: {
   field: ParamField;
   params: Record<string, unknown>;
   onChange: (params: Record<string, unknown>) => void;
   extraSuggestions: ExpressionSuggestion[];
+  mockInput?: unknown;
+  credentialId?: string | null;
+  nodeType?: string;
 }) {
   if (field.visibleIf && !field.visibleIf(params)) return null;
   const raw = params[field.key];
@@ -54,14 +66,14 @@ function FieldControl({
       const strVal = value == null ? '' : String(value);
       return (
         <div>
-          <label className={labelClass}>{field.label}</label>
-          <ExpressionAutocomplete
+          <ExpressionEditorInput
+            label={field.label}
             value={strVal}
-            onChange={(v) => onChange(setField(params, field.key, v))}
-            rows={1}
-            placeholder={field.placeholder}
+            type="string"
+            mockInput={mockInput}
             extraSuggestions={extraSuggestions}
-            className={`${inputClass} font-display`}
+            placeholder={field.placeholder}
+            onChange={(v) => onChange(setField(params, field.key, v))}
           />
           {field.help && <p className={helpClass}>{field.help}</p>}
           {error && <p className={errorClass}>{error}</p>}
@@ -72,17 +84,14 @@ function FieldControl({
       const strVal = value == null ? '' : String(value);
       return (
         <div>
-          <label className={labelClass}>
-            {field.label}
-            {field.key === 'systemPrompt' && <span className="text-muted/70 normal-case"> — {strVal.length} chars</span>}
-          </label>
-          <ExpressionAutocomplete
+          <ExpressionEditorInput
+            label={field.key === 'systemPrompt' ? `${field.label} — ${strVal.length} chars` : field.label}
             value={strVal}
-            onChange={(v) => onChange(setField(params, field.key, v))}
-            rows={3}
-            placeholder={field.placeholder}
+            type="string"
+            mockInput={mockInput}
             extraSuggestions={extraSuggestions}
-            className={`${inputClass} font-display`}
+            placeholder={field.placeholder}
+            onChange={(v) => onChange(setField(params, field.key, v))}
           />
           {field.help && <p className={helpClass}>{field.help}</p>}
         </div>
@@ -219,6 +228,9 @@ function FieldControl({
                         commit(next);
                       }}
                       extraSuggestions={extraSuggestions}
+                      mockInput={mockInput}
+                      credentialId={credentialId}
+                      nodeType={nodeType}
                     />
                   ))}
                 </div>
@@ -234,6 +246,24 @@ function FieldControl({
           </button>
           {field.help && <p className={helpClass}>{field.help}</p>}
         </div>
+      );
+    }
+    case 'resource': {
+      // ResourceLocatorInput: pick an external resource by name/id via a
+      // small list endpoint, or type the ID directly. Needs field.resource
+      // (e.g. 'files') and field.nodeType (e.g. 'googleDrive') in paramSchemas.
+      const resourceNodeType = (field as any).nodeType ?? nodeType ?? '';
+      const resourceName = (field as any).resource ?? field.key;
+      return (
+        <ResourceLocatorInput
+          nodeType={resourceNodeType}
+          resource={resourceName}
+          credentialId={credentialId ?? null}
+          value={value == null ? '' : String(value)}
+          label={field.label}
+          placeholder={field.placeholder}
+          onChange={(v) => onChange(setField(params, field.key, v))}
+        />
       );
     }
     case 'json': {
@@ -308,6 +338,8 @@ export default function ParamForm({
   onChange,
   accentColor,
   extraSuggestions = [],
+  mockInput,
+  credentialId,
   workflowId,
   siblingWebhookPaths = [],
   siblingChatPaths = [],
@@ -321,7 +353,7 @@ export default function ParamForm({
       </p>
 
       {schema.fields.map((field) => (
-        <FieldControl key={field.key} field={field} params={params} onChange={onChange} extraSuggestions={extraSuggestions} />
+        <FieldControl key={field.key} field={field} params={params} onChange={onChange} extraSuggestions={extraSuggestions} mockInput={mockInput} credentialId={credentialId} nodeType={nodeType} />
       ))}
 
       {nodeType === 'webhook' && (

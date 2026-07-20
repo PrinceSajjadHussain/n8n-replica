@@ -16,6 +16,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { io, type Socket } from 'socket.io-client';
+import { useExecutionStore } from '../store/executionStore';
 import { api } from '../lib/api';
 import { useAuthStore } from '../store/authStore';
 import FlowNode, { type FlowNodeData, type NodeStatus } from '../components/FlowNode';
@@ -1184,6 +1185,8 @@ function CanvasPageDesktop() {
               .filter(Boolean)}
             hasRespondToWebhookNode={nodes.some((n) => n.data.nodeType === 'respondToWebhook')}
             isWorkflowActive={isActive}
+            lastRunOutput={selectedNode.data.lastRunOutput}
+            lastRunInput={selectedNode.data.lastRunInput}
             onChange={updateSelectedNode}
             onDelete={deleteSelectedNode}
             onClose={() => setSelectedNodeId(null)}

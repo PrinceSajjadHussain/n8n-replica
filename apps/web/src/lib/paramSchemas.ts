@@ -9,8 +9,17 @@
  * no entry here simply keep using the Raw JSON editor.
  */
 
-export type FieldType = 'string' | 'expression' | 'text' | 'number' | 'boolean' | 'enum' | 'object' | 'array' | 'json';
-
+export type FieldType =
+  | 'string'
+  | 'expression'
+  | 'text'
+  | 'number'
+  | 'boolean'
+  | 'enum'
+  | 'object'
+  | 'array'
+  | 'json'
+  | 'resource';
 interface FieldBase {
   key: string;
   label: string;
@@ -29,14 +38,39 @@ export interface EnumOption {
 }
 
 export type ParamField =
-  | (FieldBase & { type: 'string' | 'expression' | 'text' })
-  | (FieldBase & { type: 'number'; min?: number; max?: number; step?: number })
-  | (FieldBase & { type: 'boolean' })
-  | (FieldBase & { type: 'enum'; options: EnumOption[] })
-  | (FieldBase & { type: 'object' }) // flat string-value key/value editor
-  | (FieldBase & { type: 'array'; itemFields: ParamField[]; itemLabel?: string }) // repeatable rows of objects
-  | (FieldBase & { type: 'json'; rows?: number });
-
+  | (FieldBase & {
+      type: 'string' | 'expression' | 'text';
+    })
+  | (FieldBase & {
+      type: 'number';
+      min?: number;
+      max?: number;
+      step?: number;
+    })
+  | (FieldBase & {
+      type: 'boolean';
+    })
+  | (FieldBase & {
+      type: 'enum';
+      options: EnumOption[];
+    })
+  | (FieldBase & {
+      type: 'object';
+    })
+  | (FieldBase & {
+      type: 'array';
+      itemFields: ParamField[];
+      itemLabel?: string;
+    })
+  | (FieldBase & {
+      type: 'json';
+      rows?: number;
+    })
+  | (FieldBase & {
+      type: 'resource';
+      resource: string;
+      nodeType?: string;
+    });
 export interface ParamSchema {
   fields: ParamField[];
 }
