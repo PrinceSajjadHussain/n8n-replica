@@ -128,3 +128,34 @@ export function getDefaultParams(nodeType: string): Record<string, unknown> {
   const defaults = NODE_DEFAULT_PARAMS[nodeType];
   return defaults ? JSON.parse(JSON.stringify(defaults)) : {};
 }
+
+/**
+ * Sample `$json` payload for trigger node types, used to seed the "Mock
+ * input" box in NodeConfigPanel's test panel when a trigger has no
+ * upstream node (so no `upstreamOutput` to prefill from) and no saved
+ * session value yet.
+ *
+ * Without this, trigger nodes defaulted to mock input `{}` — a technically
+ * valid but empty payload — so every `{{$json.field}}` expression on the
+ * trigger itself, and on every downstream node that seeds its own default
+ * mock from the trigger's last-run output, resolved to nothing on first
+ * test. This is the fix: give each trigger a realistic shape out of the
+ * box (matching what apps/worker/src/nodes/triggerNodes.ts actually seeds
+ * `input` with at real runtime) so `{{$json.message}}`, `{{$json.sessionId}}`,
+ * etc. resolve immediately, the same way n8n's trigger nodes ship with
+ * sample data pre-filled.
+ */
+export const NODE_DEFAULT_MOCK_INPUT: Record<string, unknown> = {
+  chatTrigger: { sessionId: 'test-session-1', message: 'Hello, how can you help me?', attachments: [] },
+  webhook: { headers: { 'content-type': 'application/json' }, query: {}, body: { example: 'value' } },
+  formTrigger: { message: 'Sample form submission' },
+  rssTrigger: { id: 'item-1', title: 'Sample feed item', link: 'https://example.com/post', pubDate: new Date().toISOString() },
+  mqttTrigger: { topic: 'flowforge/events', value: 'sample payload' },
+  schedule: { triggeredAt: new Date().toISOString() },
+};
+
+/** Returns the sample mock-input payload for a trigger node type, or `undefined` if none is defined. */
+export function getDefaultMockInput(nodeType: string): unknown {
+  const sample = NODE_DEFAULT_MOCK_INPUT[nodeType];
+  return sample ? JSON.parse(JSON.stringify(sample)) : undefined;
+}

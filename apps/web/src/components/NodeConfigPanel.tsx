@@ -11,6 +11,7 @@ import SchemaTreeView from './SchemaTreeView';
 import { getParamSchema } from '../lib/paramSchemas';
 import { getNodeTypeMeta } from '../lib/nodeTypeMeta';
 import { CREDENTIAL_TYPE_META, NODE_TYPE_TO_CREDENTIAL_TYPE, type CredentialType } from '../lib/credentialSchemas';
+import { getDefaultMockInput } from '../lib/nodeDefaults';
 
 interface Props {
   nodeId: string;
@@ -56,6 +57,8 @@ interface Props {
     isPinned?: boolean;
     pinnedOutput?: unknown;
     notes?: string | null;
+    lastRunInput?: unknown;
+    lastRunOutput?: unknown;
   }) => void;
   onDelete: () => void;
   onClose: () => void;
@@ -118,6 +121,14 @@ export default function NodeConfigPanel({
     if (upstreamOutput !== undefined) {
       try {
         return JSON.stringify(upstreamOutput, null, 2);
+      } catch {
+        // fall through
+      }
+    }
+    const sample = getDefaultMockInput(nodeType);
+    if (sample !== undefined) {
+      try {
+        return JSON.stringify(sample, null, 2);
       } catch {
         // fall through
       }
@@ -203,6 +214,13 @@ export default function NodeConfigPanel({
       });
       setTestResult(data.output);
       setTestItems(data.items ?? null);
+      // Mirror n8n: a successful manual test "pins" this node's real
+      // input/output onto the canvas node, so the next node downstream
+      // sees it as `upstreamOutput` and prefills its own test panel with
+      // real data instead of `{}` — without this, testing node-by-node
+      // never propagates data and every $json.field after the first node
+      // resolves to nothing.
+      onChange({ lastRunInput: parsedInput, lastRunOutput: data.output });
     } catch (err: any) {
       setTestError(err?.response?.data?.error ?? 'Test run failed');
     } finally {
