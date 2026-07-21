@@ -21,6 +21,9 @@ import { randomUUID, createHash } from 'crypto';
  *   $now / $today   -> current ISO timestamp / YYYY-MM-DD
  *   $binary         -> metadata (mimeType/fileName/fileSize) for the
  *                      current input item(s) — never raw bytes
+ *   $trigger        -> the original trigger payload (chatTrigger: { sessionId, message, attachments },
+ *                      webhook: { body, headers, query }). Safe to use from ANY downstream node
+ *                      regardless of chain length — no need to know the trigger node label.
  *   $fn.<namespace>.<fn>(...) -> the same helper library as before
  *      (date/string/math/random/hash/json), now callable as ordinary
  *      functions inside real JS rather than parsed positionally.
@@ -61,6 +64,9 @@ export interface ExpressionContext {
   item?: unknown; // current loop item, if inside a forEach
   /** Binary metadata (mimeType/fileName/fileSize — never the raw base64) for the current input item(s). */
   binary?: unknown;
+  /** The original trigger payload that started this run (chatTrigger, webhook, etc).
+   *  Access via $trigger.sessionId, $trigger.message, etc — works from any node regardless of chain length. */
+  trigger?: unknown;
 }
 
 const EXPR_RE = /\{\{\s*([\s\S]+?)\s*\}\}/g;
@@ -277,6 +283,7 @@ async function evalExprSandboxed(expr: string, ctx: ExpressionContext): Promise<
       binary: ctx.binary ?? null,
       workflow: ctx.workflow,
       execution: ctx.execution,
+      trigger: ctx.trigger ?? {},
     });
 
     await jail.set(
@@ -311,6 +318,7 @@ async function evalExprSandboxed(expr: string, ctx: ExpressionContext): Promise<
         const $binary = __data.binary;
         const $workflow = __data.workflow;
         const $execution = __data.execution;
+        const $trigger = __data.trigger;
         const $now = new Date().toISOString();
         const $today = new Date().toISOString().slice(0, 10);
         const $node = new Proxy({}, {

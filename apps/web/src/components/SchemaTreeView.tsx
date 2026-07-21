@@ -266,7 +266,7 @@ interface TableViewProps {
 /** Spreadsheet-style rendering of every item, matching n8n's "Table" tab. Each cell is click/drag-insertable, addressed as an indexed path (e.g. `[2].email`) when there's more than one item, or a bare field path for a single item — mirroring how $json resolves per-item during execution. */
 function TableView({ items, nodeLabel, refKind = 'output', onInsert }: TableViewProps) {
   if (items.length === 0) {
-    return <div className="text-[11px] text-muted px-2 py-3">No output data yet — run the node first.</div>;
+    return <div className="text-[11px] text-muted px-2 py-3">No data yet — click "▶ Run this node in isolation" below to generate output, then fields appear here for drag-to-insert.</div>;
   }
   const columns = collectColumns(items);
   if (columns.length === 0) {
@@ -355,7 +355,7 @@ export default function SchemaTreeView({
   if (!rootValue || typeof rootValue !== 'object') {
     return (
       <div className={`text-[11px] text-muted px-2 py-3 ${className}`}>
-        No {label.toLowerCase()} data yet — run the node first.
+        No {label.toLowerCase()} data yet — run the node in isolation below to populate this.
       </div>
     );
   }

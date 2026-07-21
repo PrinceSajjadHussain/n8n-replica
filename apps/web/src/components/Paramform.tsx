@@ -691,12 +691,12 @@ function ChatGuidedExtras({
   const responseMode = String(params.responseMode ?? 'lastNode');
   const [copied, setCopied] = useState(false);
 
-  const examplePayload = `{ "message": "Hello!", "sessionId": "optional-thread-id" }`;
+  const psExample = `$body = @{\n    message   = "Hello!"\n    sessionId = "my-session-123"\n} | ConvertTo-Json\n\nInvoke-RestMethod \`\n    -Uri "${url}" \`\n    -Method Post \`\n    -ContentType "application/json" \`\n    -Body $body`;
 
   return (
     <div className="border-t border-panelBorder pt-3 grid gap-3">
       <div>
-        <label className={labelClass}>Final URL preview</label>
+        <label className={labelClass}>Chat endpoint URL</label>
         {!isWorkflowActive && (
           <p className={helpClass}>Workflow isn't published yet — this test URL runs your current draft.</p>
         )}
@@ -716,12 +716,13 @@ function ChatGuidedExtras({
             {copied ? '✓ Copied' : 'Copy'}
           </button>
         </div>
-        <p className={helpClass}>
-          POST here with a JSON body like <code className="text-[10px]">{examplePayload}</code>.{' '}
-          {isWorkflowActive
-            ? 'Reply is held open until the run finishes (default 60s timeout).'
-            : "This test path runs against your current draft and works even though the workflow isn't published yet. Reply is held open until the run finishes (default 60s timeout)."}
+        <p className="text-amber-400/90 text-[11px] mt-1">
+          ⚠ Always POST to <strong>/chat/</strong> — not <strong>/webhook/</strong>. Body must have <code className="text-[10px]">message</code> (string) and optionally <code className="text-[10px]">sessionId</code>.
         </p>
+        <details className="mt-1">
+          <summary className={`${helpClass} cursor-pointer hover:text-ink select-none`}>PowerShell example ▸</summary>
+          <pre className="mt-1 text-[10px] bg-canvas border border-panelBorder rounded-md p-2 overflow-x-auto">{psExample}</pre>
+        </details>
         {isDuplicate && (
           <p className={errorClass}>
             Another chat trigger in this workflow already uses path "{path}" — only one will ever be reachable.

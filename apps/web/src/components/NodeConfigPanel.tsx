@@ -307,7 +307,7 @@ export default function NodeConfigPanel({
   onClose,
 }: Props) {
   const [showCredentialModal, setShowCredentialModal] = useState(false);
-  const [schemaOpen, setSchemaOpen] = useState(false);
+  const [schemaOpen, setSchemaOpen] = useState(() => false);
   // n8n-style I/O panel: which side (input coming in / output produced) and
   // which sub-view (field tree / spreadsheet table / raw JSON / binary) is shown.
   const [ioSide, setIoSide] = useState<'input' | 'output'>('output');
@@ -451,6 +451,8 @@ export default function NodeConfigPanel({
     setTestInput(defaultTestInput());
     setTestInputMode((sessionStorage.getItem(`session:${workflowId ?? 'wf'}:${nodeId}:testMode`) as 'single' | 'array') || 'single');
     setIoRefNodeId('');
+    // Auto-open I/O panel when there is upstream or run data to browse
+    setSchemaOpen(upstreamNodes.length > 0 || lastRunOutput !== undefined || lastRunInput !== undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodeId]);
 
@@ -726,7 +728,7 @@ export default function NodeConfigPanel({
             </div>
           )}
 
-          {(lastRunOutput || lastRunInput || upstreamNodes.some((n) => n.output !== undefined)) && (
+          {(lastRunOutput !== undefined || lastRunInput !== undefined || upstreamNodes.length > 0) && (
             <div className="border border-panelBorder rounded-md overflow-hidden mb-2">
               <button
                 type="button"
@@ -777,7 +779,7 @@ export default function NodeConfigPanel({
           {(!paramSchema || showRawJson) && (
             <>
               <label className="block text-xs text-muted mb-1">
-                Params (JSON) <span className="text-muted/70 normal-case">— type {'{{'} for expression autocomplete</span>
+                Params (JSON) <span className="text-muted/70 normal-case">— type {'{{$'} for autocomplete</span>
               </label>
               <ExpressionAutocomplete
                 value={paramsJson}
@@ -791,15 +793,20 @@ export default function NodeConfigPanel({
               <p className="text-muted text-[11px] mt-1">{paramHint(nodeType)}</p>
             </>
           )}
-          <p className="text-muted text-[11px] mt-2 border-t border-panelBorder pt-2">
-            Expressions work in any string param: <code>{'{{$json.field}}'}</code>,{' '}
-            <code>{'{{$node["Label"].json.field}}'}</code>, <code>{'{{$binary.data.mimeType}}'}</code>,{' '}
-            <code>{'{{$env.NAME}}'}</code>, <code>{'{{$now}}'}</code>. Helper functions:{' '}
-            <code>{'{{$fn.date.format($json.createdAt,"YYYY-MM-DD")}}'}</code>,{' '}
-            <code>{'{{$fn.string.upper($json.name)}}'}</code>,{' '}
-            <code>{'{{$fn.math.round($json.total)}}'}</code>,{' '}
-            <code>{'{{$fn.random.uuid()}}'}</code>, <code>{'{{$fn.hash.sha256($json.id)}}'}</code>.
-          </p>
+          <details className="mt-2 border-t border-panelBorder pt-2">
+            <summary className="text-muted text-[11px] cursor-pointer hover:text-ink select-none">
+              Expression syntax reference ▸
+            </summary>
+            <div className="mt-1 space-y-1 text-[11px] text-muted">
+              <p><code className="text-ink">{'{{$json.field}}'}</code> — current item's JSON field</p>
+              <p><code className="text-ink">{'{{$node["Label"].json.field}}'}</code> — another node's output</p>
+              <p><code className="text-ink">{'{{$trigger.sessionId}}'}</code> — chatTrigger session ID, works from ANY downstream node</p>
+              <p><code className="text-ink">{'{{$trigger.message}}'}</code> — chatTrigger user message, works from ANY downstream node</p>
+              <p><code className="text-ink">{'{{$json.field}}'}</code> — field from the IMMEDIATELY upstream node's output</p>
+              <p><code className="text-ink">{'{{$env.NAME}}'}</code> — environment variable</p>
+              <p><code className="text-ink">{'{{$now}}'}</code> — current ISO timestamp</p>
+            </div>
+          </details>
         </div>
 
         <div className="border-t border-panelBorder pt-4">
@@ -1050,7 +1057,7 @@ function paramHint(nodeType: string): string {
     case 'browserAutomation':
       return 'e.g. { "url": "https://example.com", "steps": [{ "action": "click", "selector": "#login" }] } — requires the browser-runner service, see docs/browser-automation.md';
     case 'agent':
-      return 'e.g. { "sessionId": "customer-42", "systemPrompt": "You are a support agent.", "prompt": "{{$json.message}}", "tools": [{ "name": "send_slack", "nodeType": "slack", "description": "Post a Slack message", "parameters": { "text": { "type": "string" } } }], "recentTurns": 12, "longTermMemory": true, "recallTopK": 4 } — requires an "openai" credential. Memory persists across runs by sessionId: recent turns are replayed verbatim, older turns are recalled by semantic (vector) search. See docs/ai-agents.md.';
+      return 'Use the form above. Key fields: sessionId → {{$trigger.sessionId}}, prompt → {{$trigger.message}}. $trigger always resolves to the original chatTrigger payload regardless of chain length. Requires an OpenAI or Gemini credential.';
     case 'agentMemory':
       return 'e.g. { "action": "recall", "sessionId": "customer-42", "query": "what did they order last time?", "topK": 5 } — actions: "read" (recent turns), "write" ({ role, content }), "clear", "recall" (vector search over ALL stored turns). An "openai" credential enables embeddings for write/recall.';
     case 'agentOrchestrator':

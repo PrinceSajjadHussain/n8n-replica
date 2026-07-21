@@ -360,6 +360,11 @@ async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'faile
           binary: 'binary' in currentItem ? stripBinaryData(currentItem.binary) : undefined,
           vars,
           staticData,
+          // $trigger — the original payload that started this run (chatTrigger,
+          // webhook, etc). Lets any downstream node reference the trigger's
+          // sessionId / message without needing to know the trigger node label:
+          //   {{  $trigger.sessionId  }}   — works in redisMemory, agent, gemini, etc.
+          trigger: triggerPayload != null && typeof triggerPayload === 'object' ? triggerPayload : {},
         };
 
         const resolvedParams = await resolveExpressions(node.params ?? {}, exprCtx, {
