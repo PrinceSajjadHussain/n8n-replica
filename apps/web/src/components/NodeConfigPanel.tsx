@@ -8,6 +8,7 @@ import SwitchCasesEditor from './SwitchCasesEditor';
 import IfConditionsEditor from './IfConditionsEditor';
 import ParamForm from './Paramform';
 import SchemaTreeView from './SchemaTreeView';
+import ChatTestPanel from './ChatTestPanel';
 import { getParamSchema } from '../lib/paramSchemas';
 import { getNodeTypeMeta } from '../lib/nodeTypeMeta';
 import { CREDENTIAL_TYPE_META, NODE_TYPE_TO_CREDENTIAL_TYPE, type CredentialType } from '../lib/credentialSchemas';
@@ -142,6 +143,7 @@ export default function NodeConfigPanel({
   const [testItems, setTestItems] = useState<Array<{ json: unknown; binary?: Record<string, { mimeType: string; fileName?: string; fileSize?: number }> }> | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
   const [runFromHereBusy, setRunFromHereBusy] = useState(false);
+  const [chatPanelOpen, setChatPanelOpen] = useState(false);
   const [credTestBusy, setCredTestBusy] = useState(false);
   const [credTestResult, setCredTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
@@ -291,6 +293,7 @@ export default function NodeConfigPanel({
   const nodeMeta = getNodeTypeMeta(nodeType);
 
   return (
+    <>
     <aside className="w-80 border-l border-panelBorder bg-panel shrink-0 overflow-y-auto flex flex-col">
       <div className="px-4 py-4 border-b border-panelBorder flex items-center justify-between">
         <p className="text-xs uppercase tracking-widest text-muted font-display">Configure node</p>
@@ -662,6 +665,15 @@ export default function NodeConfigPanel({
                 {runFromHereBusy ? 'Starting…' : '⏩ Run workflow from here'}
               </button>
             )}
+            {nodeType === 'chatTrigger' && workflowId && (
+              <button
+                onClick={() => setChatPanelOpen(true)}
+                title="Open a chat box to manually send test messages into this workflow's draft graph — no publish needed"
+                className="focus-ring text-xs px-3 py-1.5 rounded-md border border-panelBorder text-muted hover:text-ink hover:border-signal/40"
+              >
+                💬 Open Chat
+              </button>
+            )}
           </div>
           {testError && <p className="text-alert text-xs mt-2">{testError}</p>}
           {testItems && (
@@ -735,6 +747,17 @@ export default function NodeConfigPanel({
         </button>
       </div>
     </aside>
+
+    {chatPanelOpen && nodeType === 'chatTrigger' && workflowId && (
+      <ChatTestPanel
+        workflowId={workflowId}
+        nodeId={nodeId}
+        path={String(params?.path ?? 'default')}
+        onClose={() => setChatPanelOpen(false)}
+        onPinResult={(pinInput, pinOutput) => onChange({ lastRunInput: pinInput, lastRunOutput: pinOutput })}
+      />
+    )}
+    </>
   );
 }
 
