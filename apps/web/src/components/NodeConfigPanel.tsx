@@ -8,7 +8,6 @@ import SwitchCasesEditor from './SwitchCasesEditor';
 import IfConditionsEditor from './IfConditionsEditor';
 import ParamForm from './Paramform';
 import SchemaTreeView from './SchemaTreeView';
-import ChatTestPanel from './ChatTestPanel';
 import { getParamSchema } from '../lib/paramSchemas';
 import { getNodeTypeMeta } from '../lib/nodeTypeMeta';
 import { CREDENTIAL_TYPE_META, NODE_TYPE_TO_CREDENTIAL_TYPE, type CredentialType } from '../lib/credentialSchemas';
@@ -43,6 +42,8 @@ interface Props {
   hasRespondToWebhookNode?: boolean;
   /** Whether the workflow is currently published/active — webhook and chat trigger URL previews use the `/test/...` path while unpublished, matching the API's test/production route split. */
   isWorkflowActive?: boolean;
+  /** Opens the floating Test Chat widget for this node (lifted up to CanvasPage so Run can also auto-open it, and so it survives switching node selection). */
+  onOpenChatTest?: () => void;
   /** Last-run output for this node — drives SchemaTreeView for drag-to-insert field references. */
   lastRunOutput?: unknown;
   /** Last-run input for this node — used as $json mock context in ExpressionEditorInput live preview. */
@@ -298,6 +299,7 @@ export default function NodeConfigPanel({
   siblingChatPaths = [],
   hasRespondToWebhookNode = false,
   isWorkflowActive = false,
+  onOpenChatTest,
   lastRunOutput,
   lastRunInput,
   upstreamOutput,
@@ -316,6 +318,22 @@ export default function NodeConfigPanel({
   // ancestor whose own last-run output is being browsed instead.
   const [ioRefNodeId, setIoRefNodeId] = useState('');
   const requiredCredentialType = NODE_TYPE_TO_CREDENTIAL_TYPE[nodeType] as CredentialType | undefined;
+  // These node types accept several LLM providers via params.provider (openai/anthropic/gemini/…) — the
+  // NODE_TYPE_TO_CREDENTIAL_TYPE entry for them is just a default-selected suggestion, not a strict
+  // requirement, so their "+ New credential" modal shouldn't lock the Type dropdown to OpenAI only.
+  const MULTI_PROVIDER_NODE_TYPES = new Set([
+    'agent',
+    'agentMemory',
+    'agentOrchestrator',
+    'textClassifier',
+    'sentimentAnalysis',
+    'entityExtractor',
+    'summarizer',
+    'qaChain',
+    'ragIngest',
+    'ragQuery',
+  ]);
+  const credentialTypeIsLocked = !MULTI_PROVIDER_NODE_TYPES.has(nodeType);
   const [localLabel, setLocalLabel] = useState(label);
   const [localNotes, setLocalNotes] = useState(notes ?? '');
   const [paramsJson, setParamsJson] = useState(JSON.stringify(params, null, 2));
@@ -354,7 +372,6 @@ export default function NodeConfigPanel({
   const [testItems, setTestItems] = useState<Array<{ json: unknown; binary?: Record<string, { mimeType: string; fileName?: string; fileSize?: number }> }> | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
   const [runFromHereBusy, setRunFromHereBusy] = useState(false);
-  const [chatPanelOpen, setChatPanelOpen] = useState(false);
   const [credTestBusy, setCredTestBusy] = useState(false);
   const [credTestResult, setCredTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
@@ -508,7 +525,7 @@ export default function NodeConfigPanel({
 
   return (
     <>
-    <aside className="w-80 border-l border-panelBorder bg-panel shrink-0 overflow-y-auto flex flex-col">
+    <aside className="w-80 min-h-0 border-l border-panelBorder bg-panel shrink-0 overflow-y-auto flex flex-col">
       <div className="px-4 py-4 border-b border-panelBorder flex items-center justify-between">
         <p className="text-xs uppercase tracking-widest text-muted font-display">Configure node</p>
         <button onClick={onClose} className="focus-ring text-muted hover:text-ink text-sm">
@@ -654,6 +671,7 @@ export default function NodeConfigPanel({
         {showCredentialModal && (
           <CredentialQuickCreateModal
             defaultType={requiredCredentialType}
+            lockType={credentialTypeIsLocked}
             onClose={() => setShowCredentialModal(false)}
             onCreated={(cred) => {
               setShowCredentialModal(false);
@@ -878,9 +896,9 @@ export default function NodeConfigPanel({
                 {runFromHereBusy ? 'Starting…' : '⏩ Run workflow from here'}
               </button>
             )}
-            {nodeType === 'chatTrigger' && workflowId && (
+            {nodeType === 'chatTrigger' && workflowId && onOpenChatTest && (
               <button
-                onClick={() => setChatPanelOpen(true)}
+                onClick={onOpenChatTest}
                 title="Open a chat box to manually send test messages into this workflow's draft graph — no publish needed"
                 className="focus-ring text-xs px-3 py-1.5 rounded-md border border-panelBorder text-muted hover:text-ink hover:border-signal/40"
               >
@@ -960,16 +978,6 @@ export default function NodeConfigPanel({
         </button>
       </div>
     </aside>
-
-    {chatPanelOpen && nodeType === 'chatTrigger' && workflowId && (
-      <ChatTestPanel
-        workflowId={workflowId}
-        nodeId={nodeId}
-        path={String(params?.path ?? 'default')}
-        onClose={() => setChatPanelOpen(false)}
-        onPinResult={(pinInput, pinOutput) => onChange({ lastRunInput: pinInput, lastRunOutput: pinOutput })}
-      />
-    )}
     </>
   );
 }

@@ -221,35 +221,262 @@ async function runTool(
 }
 
 /**
- * agent — a tool-using AI agent. Give it a list of AgentToolSpec entries
- * (params.tools) and it will loop: call the model -> if it requests a tool
- * call, dispatch it through runTool() -> feed the result back -> repeat,
+ * MULTI-PROVIDER MODEL CALLS
+ * ==========================
+ * The agent loop used to be hard-wired to OpenAI's Chat Completions API, so
+ * an "AI Agent" node could only ever run on an OpenAI credential — picking
+ * Gemini/Anthropic from the credential picker did nothing. This normalizes
+ * a tiny "transcript" shape across providers so the same tool-use loop below
+ * works no matter which one is selected via `params.provider`.
+ */
+export type AgentProvider = 'openai' | 'anthropic' | 'gemini';
+
+export interface AgentTurn {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string;
+  /** Present on an assistant turn that called one or more tools instead of answering directly. */
+  toolCalls?: { id: string; name: string; args: string }[];
+  /** Present on a 'tool' turn — which call this result answers. */
+  toolCallId?: string;
+  toolName?: string;
+}
+
+interface ModelStepResult {
+  /** Non-empty when the model answered directly (no further tool calls this step). */
+  text: string | null;
+  toolCalls: { id: string; name: string; args: string }[];
+}
+
+function resolveAgentApiKey(provider: AgentProvider, credential: Record<string, unknown> | null): string {
+  const fromCredential = credential?.apiKey as string | undefined;
+  const fromEnv =
+    provider === 'anthropic' ? process.env.ANTHROPIC_API_KEY
+    : provider === 'gemini' ? (process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY)
+    : process.env.OPENAI_API_KEY;
+  const apiKey = fromCredential ?? fromEnv;
+  if (!apiKey) {
+    const credLabel = provider === 'anthropic' ? 'anthropic' : provider === 'gemini' ? 'gemini' : 'openai';
+    throw new Error(
+      `agent node: no API key for provider "${provider}". Add a "${credLabel}" credential and select it on this node (or set the matching *_API_KEY env var on the worker).`
+    );
+  }
+  return apiKey;
+}
+
+async function callOpenAiStep(
+  model: string,
+  apiKey: string,
+  transcript: AgentTurn[],
+  tools: AgentToolSpec[]
+): Promise<ModelStepResult> {
+  const messages = transcript.map((t) => {
+    if (t.role === 'assistant' && t.toolCalls?.length) {
+      return {
+        role: 'assistant',
+        content: t.content || null,
+        tool_calls: t.toolCalls.map((tc) => ({ id: tc.id, type: 'function', function: { name: tc.name, arguments: tc.args } })),
+      };
+    }
+    if (t.role === 'tool') return { role: 'tool', tool_call_id: t.toolCallId, content: t.content };
+    return { role: t.role, content: t.content };
+  });
+  const openaiTools = tools.map((t) => ({
+    type: 'function',
+    function: { name: t.name, description: t.description, parameters: { type: 'object', properties: t.parameters } },
+  }));
+  const response = await axios.post(
+    'https://api.openai.com/v1/chat/completions',
+    { model, messages, ...(openaiTools.length ? { tools: openaiTools } : {}) },
+    { headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, timeout: 60000 }
+  );
+  const message = response.data.choices?.[0]?.message ?? {};
+  const toolCalls = (message.tool_calls as Array<{ id: string; function: { name: string; arguments: string } }> | undefined) ?? [];
+  if (toolCalls.length > 0) {
+    return { text: null, toolCalls: toolCalls.map((tc) => ({ id: tc.id, name: tc.function.name, args: tc.function.arguments })) };
+  }
+  return { text: message.content ?? '', toolCalls: [] };
+}
+
+async function callAnthropicStep(
+  model: string,
+  apiKey: string,
+  transcript: AgentTurn[],
+  tools: AgentToolSpec[]
+): Promise<ModelStepResult> {
+  const systemText = transcript.filter((t) => t.role === 'system').map((t) => t.content).join('\n\n');
+  const messages: Array<Record<string, unknown>> = [];
+  for (const t of transcript) {
+    if (t.role === 'system') continue;
+    if (t.role === 'assistant' && t.toolCalls?.length) {
+      const blocks: Record<string, unknown>[] = [];
+      if (t.content) blocks.push({ type: 'text', text: t.content });
+      for (const tc of t.toolCalls) {
+        let input: unknown = {};
+        try {
+          input = JSON.parse(tc.args || '{}');
+        } catch {
+          input = {};
+        }
+        blocks.push({ type: 'tool_use', id: tc.id, name: tc.name, input });
+      }
+      messages.push({ role: 'assistant', content: blocks });
+    } else if (t.role === 'tool') {
+      messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: t.toolCallId, content: t.content }] });
+    } else {
+      messages.push({ role: t.role, content: t.content });
+    }
+  }
+  const anthropicTools = tools.map((t) => ({
+    name: t.name,
+    description: t.description,
+    input_schema: { type: 'object', properties: t.parameters },
+  }));
+  const response = await axios.post(
+    'https://api.anthropic.com/v1/messages',
+    {
+      model,
+      max_tokens: 4096,
+      ...(systemText ? { system: systemText } : {}),
+      messages,
+      ...(anthropicTools.length ? { tools: anthropicTools } : {}),
+    },
+    { headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' }, timeout: 60000 }
+  );
+  const blocks = (response.data.content ?? []) as Array<Record<string, unknown>>;
+  const toolUseBlocks = blocks.filter((b) => b.type === 'tool_use');
+  if (toolUseBlocks.length > 0) {
+    return {
+      text: null,
+      toolCalls: toolUseBlocks.map((b) => ({
+        id: String(b.id),
+        name: String(b.name),
+        args: JSON.stringify(b.input ?? {}),
+      })),
+    };
+  }
+  const text = blocks.filter((b) => b.type === 'text').map((b) => String(b.text ?? '')).join('');
+  return { text, toolCalls: [] };
+}
+
+async function callGeminiStep(
+  model: string,
+  apiKey: string,
+  transcript: AgentTurn[],
+  tools: AgentToolSpec[]
+): Promise<ModelStepResult> {
+  const systemText = transcript.filter((t) => t.role === 'system').map((t) => t.content).join('\n\n');
+  const contents: Array<Record<string, unknown>> = [];
+  for (const t of transcript) {
+    if (t.role === 'system') continue;
+    if (t.role === 'assistant' && t.toolCalls?.length) {
+      contents.push({
+        role: 'model',
+        parts: t.toolCalls.map((tc) => {
+          let args: unknown = {};
+          try {
+            args = JSON.parse(tc.args || '{}');
+          } catch {
+            args = {};
+          }
+          return { functionCall: { name: tc.name, args } };
+        }),
+      });
+    } else if (t.role === 'tool') {
+      let response: unknown;
+      try {
+        response = JSON.parse(t.content);
+      } catch {
+        response = { result: t.content };
+      }
+      contents.push({ role: 'function', parts: [{ functionResponse: { name: t.toolName ?? 'tool', response } }] });
+    } else {
+      contents.push({ role: t.role === 'assistant' ? 'model' : 'user', parts: [{ text: t.content }] });
+    }
+  }
+  const geminiTools = tools.length
+    ? [{ functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description, parameters: { type: 'OBJECT', properties: t.parameters } })) }]
+    : undefined;
+  const response = await axios.post(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+    {
+      contents,
+      ...(systemText ? { systemInstruction: { parts: [{ text: systemText }] } } : {}),
+      ...(geminiTools ? { tools: geminiTools } : {}),
+    },
+    { headers: { 'Content-Type': 'application/json' }, timeout: 60000 }
+  );
+  const parts = (response.data.candidates?.[0]?.content?.parts ?? []) as Array<Record<string, unknown>>;
+  const functionCallParts = parts.filter((p) => p.functionCall);
+  if (functionCallParts.length > 0) {
+    return {
+      text: null,
+      toolCalls: functionCallParts.map((p, i) => {
+        const fc = p.functionCall as { name: string; args?: unknown };
+        return { id: `${fc.name}-${Date.now()}-${i}`, name: fc.name, args: JSON.stringify(fc.args ?? {}) };
+      }),
+    };
+  }
+  const text = parts.filter((p) => typeof p.text === 'string').map((p) => String(p.text)).join('');
+  return { text, toolCalls: [] };
+}
+
+async function callAgentModel(
+  provider: AgentProvider,
+  model: string,
+  apiKey: string,
+  transcript: AgentTurn[],
+  tools: AgentToolSpec[]
+): Promise<ModelStepResult> {
+  if (provider === 'anthropic') return callAnthropicStep(model, apiKey, transcript, tools);
+  if (provider === 'gemini') return callGeminiStep(model, apiKey, transcript, tools);
+  return callOpenAiStep(model, apiKey, transcript, tools);
+}
+
+function defaultModelFor(provider: AgentProvider): string {
+  if (provider === 'anthropic') return 'claude-sonnet-4-5-20250929';
+  if (provider === 'gemini') return 'gemini-2.0-flash';
+  return 'gpt-4o-mini';
+}
+
+ /* call, dispatch it through runTool() -> feed the result back -> repeat,
  * until the model returns a final answer or maxSteps is hit. Conversation
  * history persists across runs via params.sessionId + agentMemory.
  *
- * credential (type 'openai'): { apiKey: string }
+ * credential (type matches `params.provider`): { apiKey: string }
  * params:
+ *   provider?: 'openai' | 'anthropic' | 'gemini'   default 'openai'
  *   sessionId?: string        default 'default' — memory scope
  *   systemPrompt?: string
  *   prompt: string            this turn's user message
  *   tools?: AgentToolSpec[]
- *   model?: string            default 'gpt-4o-mini'
+ *   model?: string            default depends on provider (e.g. 'gpt-4o-mini' for openai)
  *   maxSteps?: number         default 6
  *   recentTurns?: number      default 12 — how many recent turns go into the
  *                             short-term (verbatim) context window
  *   longTermMemory?: boolean  default true — semantically recall older turns
  *                             outside the recent window (see agentNode.ts
- *                             header comment on the two memory layers)
+ *                             header comment on the two memory layers).
+ *                             Long-term recall always uses OpenAI embeddings
+ *                             regardless of `provider` — if no OpenAI key is
+ *                             available it's skipped automatically, the rest
+ *                             of the agent still runs fine on any provider.
  *   recallTopK?: number       default 4 — how many long-term memories to recall
  */
 export const agentNode: NodePlugin = {
   type: 'agent',
   async execute({ params, credential, workflowId, workspaceId, staticData, setStaticData }) {
-    const apiKey = (credential?.apiKey as string) ?? process.env.OPENAI_API_KEY;
-    if (!apiKey) throw new Error('agent node: requires an "openai" credential with { "apiKey": "sk-..." }');
+    const provider = ((): AgentProvider => {
+      const p = String(params.provider ?? 'openai').toLowerCase();
+      return p === 'anthropic' || p === 'gemini' ? p : 'openai';
+    })();
+    const apiKey = resolveAgentApiKey(provider, credential);
+    // Long-term semantic recall (below) is OpenAI-embeddings-only — reuse
+    // an OpenAI credential/env key for it when one's available, but never
+    // require it when running on a different provider.
+    const embeddingApiKey = provider === 'openai' ? apiKey : (process.env.OPENAI_API_KEY ?? null);
 
     const sessionId = String(params.sessionId ?? 'default');
-    const model = String(params.model ?? 'gpt-4o-mini');
+    const model = String(params.model ?? defaultModelFor(provider));
     const maxSteps = Number(params.maxSteps ?? 6);
     // Tools come from two places: the flat params.tools array (set directly
     // in the form) and any agentTool sub-nodes wired into the Agent's "Tool"
@@ -294,18 +521,18 @@ export const agentNode: NodePlugin = {
     // the recent window above) for turns semantically relevant to this
     // prompt, so facts from long ago can still surface.
     let recalledMemories: RecalledMemory[] = [];
-    if (longTermMemoryEnabled) {
+    if (longTermMemoryEnabled && embeddingApiKey) {
       try {
-        recalledMemories = await semanticRecall(sessionId, apiKey, userPrompt, recallTopK, recentHistory.length);
+        recalledMemories = await semanticRecall(sessionId, embeddingApiKey, userPrompt, recallTopK, recentHistory.length);
       } catch {
         recalledMemories = []; // embeddings unavailable/failed — carry on with short-term memory only
       }
     }
 
-    const messages: Array<Record<string, unknown>> = [];
-    if (params.systemPrompt) messages.push({ role: 'system', content: String(params.systemPrompt) });
+    const transcript: AgentTurn[] = [];
+    if (params.systemPrompt) transcript.push({ role: 'system', content: String(params.systemPrompt) });
     if (recalledMemories.length > 0) {
-      messages.push({
+      transcript.push({
         role: 'system',
         content:
           'Relevant memories recalled from earlier in this session (not necessarily recent):\n' +
@@ -314,14 +541,9 @@ export const agentNode: NodePlugin = {
     }
     for (const turn of recentHistory) {
       if (turn.role === 'tool') continue; // tool results are re-derived per-run, not replayed
-      messages.push({ role: turn.role, content: turn.content });
+      transcript.push({ role: turn.role, content: turn.content });
     }
-    messages.push({ role: 'user', content: userPrompt });
-
-    const openaiTools = tools.map((t) => ({
-      type: 'function',
-      function: { name: t.name, description: t.description, parameters: { type: 'object', properties: t.parameters } },
-    }));
+    transcript.push({ role: 'user', content: userPrompt });
 
     const trace: Array<Record<string, unknown>> = [];
     if (recalledMemories.length > 0) {
@@ -330,35 +552,30 @@ export const agentNode: NodePlugin = {
     let finalText = '';
 
     for (let step = 0; step < maxSteps; step++) {
-      const response = await axios.post(
-        'https://api.openai.com/v1/chat/completions',
-        { model, messages, ...(openaiTools.length ? { tools: openaiTools } : {}) },
-        { headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, timeout: 60000 }
-      );
-      const choice = response.data.choices?.[0];
-      const message = choice?.message ?? {};
-      messages.push(message);
+      const result = await callAgentModel(provider, model, apiKey, transcript, tools);
 
-      const toolCalls = message.tool_calls as Array<{ id: string; function: { name: string; arguments: string } }> | undefined;
-      if (!toolCalls || toolCalls.length === 0) {
-        finalText = message.content ?? '';
+      if (result.toolCalls.length === 0) {
+        finalText = result.text ?? '';
+        transcript.push({ role: 'assistant', content: finalText });
         trace.push({ step, type: 'final', content: finalText });
         break;
       }
 
-      for (const call of toolCalls) {
-        const spec = tools.find((t) => t.name === call.function.name);
+      transcript.push({ role: 'assistant', content: '', toolCalls: result.toolCalls });
+
+      for (const call of result.toolCalls) {
+        const spec = tools.find((t) => t.name === call.name);
         let toolResult: unknown;
         try {
-          const args = JSON.parse(call.function.arguments || '{}');
+          const args = JSON.parse(call.args || '{}');
           toolResult = spec
             ? await runTool(spec, args, { workflowId, workspaceId, staticData, setStaticData })
-            : { error: `unknown tool ${call.function.name}` };
+            : { error: `unknown tool ${call.name}` };
         } catch (err) {
           toolResult = { error: err instanceof Error ? err.message : String(err) };
         }
-        trace.push({ step, type: 'tool_call', tool: call.function.name, args: call.function.arguments, result: toolResult });
-        messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(toolResult) });
+        trace.push({ step, type: 'tool_call', tool: call.name, args: call.args, result: toolResult });
+        transcript.push({ role: 'tool', content: JSON.stringify(toolResult), toolCallId: call.id, toolName: call.name });
       }
     }
 
@@ -374,7 +591,7 @@ export const agentNode: NodePlugin = {
           { role: 'user', content: userPrompt, at: new Date().toISOString() },
           { role: 'assistant', content: finalText, at: new Date().toISOString() },
         ],
-        apiKey
+        embeddingApiKey ?? undefined
       );
     }
 
@@ -408,12 +625,14 @@ export const agentNode: NodePlugin = {
  *   subAgents: Array<{ name: string, systemPrompt: string, tools?: AgentToolSpec[] }>
  *   reviewerPrompt?: string            default instructs it to synthesize/critique sub-agent outputs
  *   model?: string
+ *   provider?: 'openai' | 'anthropic' | 'gemini'   default 'openai'
  */
 export const agentOrchestratorNode: NodePlugin = {
   type: 'agentOrchestrator',
   async execute({ params, credential, workflowId, workspaceId, staticData, setStaticData }) {
+    const provider = String(params.provider ?? 'openai');
     const sessionId = String(params.sessionId ?? `orchestrator-${Date.now()}`);
-    const model = String(params.model ?? 'gpt-4o-mini');
+    const model = String(params.model ?? defaultModelFor(provider === 'anthropic' || provider === 'gemini' ? provider : 'openai'));
     const goal = String(params.goal ?? '');
     const subAgents = (params.subAgents as Array<{ name: string; systemPrompt: string; tools?: AgentToolSpec[] }>) ?? [];
 
@@ -429,7 +648,7 @@ export const agentOrchestratorNode: NodePlugin = {
           fileSize: buffer.length,
           data: buffer.toString('base64'),
         }),
-        params: { sessionId, model, systemPrompt, prompt, tools, maxSteps: 6 },
+        params: { sessionId, model, provider, systemPrompt, prompt, tools, maxSteps: 6 },
         workflowId,
         workspaceId,
         staticData,

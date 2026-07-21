@@ -26,6 +26,7 @@ import { autoLayout } from '../lib/autoLayout';
 import NodePalette from '../components/NodePalette';
 import { NODE_TYPES } from '../lib/nodeTypeMeta';
 import NodeConfigPanel from '../components/NodeConfigPanel';
+import ChatTestPanel from '../components/ChatTestPanel';
 import { NodeDensityContext, CredentialNamesContext, NODE_DENSITY_OPTIONS, type NodeDensity } from '../lib/nodeDensity';
 import { isScheduleCronValid } from '../components/Paramform';
 import CollabPanel from '../components/CollabPanel';
@@ -69,6 +70,10 @@ function CanvasPageDesktop() {
   const [nodes, setNodes] = useState<Node<FlowNodeData>[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  // Which chatTrigger node's floating Test Chat widget is mounted. Lifted up
+  // here (rather than living inside NodeConfigPanel) so "Run" can pop it open
+  // automatically without requiring that node to be selected first.
+  const [chatTestNodeId, setChatTestNodeId] = useState<string | null>(null);
   /**
    * Execution-lifecycle notifications (run started/finished/failed/cancelled,
    * webhook fired, cancel/retry errors) are scoped to THIS canvas — rendered
@@ -652,6 +657,12 @@ function CanvasPageDesktop() {
     );
   }
 
+  /** Same as updateSelectedNode but targets an arbitrary node id — the chat test widget can be open for a
+   *  chatTrigger node that isn't the currently-selected one (e.g. auto-opened by Run). */
+  function updateNodeById(nodeId: string, updates: Partial<FlowNodeData>) {
+    setNodes((nds) => nds.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, ...updates } } : n)));
+  }
+
   function deleteSelectedNode() {
     if (!selectedNodeId) return;
     const removed = nodes.find((n) => n.id === selectedNodeId);
@@ -866,6 +877,17 @@ function CanvasPageDesktop() {
     } catch {
       return; // handleSave already surfaced a toast
     }
+    // A workflow driven by a Chat Message trigger shouldn't be run via the
+    // generic /execute endpoint — that runs the chatTrigger node with its
+    // empty default params (you'd see it "succeed" with output {} before
+    // ever typing anything). Instead just open the test chat widget; the
+    // actual message you send is what triggers a real execution, via the
+    // /chat/test endpoint, with real input.
+    const chatTriggerNode = nodes.find((n) => n.data.nodeType === 'chatTrigger');
+    if (chatTriggerNode) {
+      setChatTestNodeId(chatTriggerNode.id);
+      return;
+    }
     try {
       const res = await api.post(`/workflows/${workflowId}/execute`, {});
       setActiveExecutionId(res.data?.executionId ?? null);
@@ -929,7 +951,7 @@ function CanvasPageDesktop() {
   }
 
   return (
-    <div className="h-screen flex flex-col">
+    <div className="h-screen flex flex-col overflow-hidden">
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
@@ -1137,7 +1159,7 @@ function CanvasPageDesktop() {
         </div>
       </header>
 
-      <div className="flex-1 flex min-h-0">
+      <div className="flex-1 flex min-h-0 overflow-hidden">
         <div className="flex flex-col min-h-0 h-full">
           {pendingHandleRequest && (
             <div className="flex items-center gap-2 px-3 py-2 text-xs border-b border-panelBorder bg-panel">
@@ -1263,6 +1285,7 @@ function CanvasPageDesktop() {
               .filter(Boolean)}
             hasRespondToWebhookNode={nodes.some((n) => n.data.nodeType === 'respondToWebhook')}
             isWorkflowActive={isActive}
+            onOpenChatTest={selectedNode.data.nodeType === 'chatTrigger' ? () => setChatTestNodeId(selectedNode.id) : undefined}
             lastRunOutput={selectedNode.data.lastRunOutput}
             lastRunInput={selectedNode.data.lastRunInput}
             upstreamNodes={(() => {
@@ -1319,6 +1342,21 @@ function CanvasPageDesktop() {
         {shareModalOpen && workflowId && (
           <WorkflowShareModal workflowId={workflowId} workflowName={name} onClose={() => setShareModalOpen(false)} />
         )}
+        {chatTestNodeId && workflowId && (() => {
+          const chatNode = nodes.find((n) => n.id === chatTestNodeId);
+          if (!chatNode) return null;
+          return (
+            <ChatTestPanel
+              workflowId={workflowId}
+              nodeId={chatNode.id}
+              path={String((chatNode.data.params as Record<string, unknown> | undefined)?.path ?? 'default')}
+              onClose={() => setChatTestNodeId(null)}
+              onPinResult={(pinInput, pinOutput) =>
+                updateNodeById(chatNode.id, { lastRunInput: pinInput, lastRunOutput: pinOutput })
+              }
+            />
+          );
+        })()}
       </div>
 
       {aiModalOpen && (

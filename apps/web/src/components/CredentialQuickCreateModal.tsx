@@ -15,8 +15,12 @@ interface CreatedCredential {
 }
 
 interface Props {
-  /** Pre-selects and locks the type to whatever the node needs, when known. */
+  /** Pre-selects the type — locked to this when the node only ever works with one credential type. */
   defaultType?: CredentialType;
+  /** When true (default), the Type select is locked to `defaultType`. Pass false for nodes like AI Agent
+   *  that accept several LLM providers (OpenAI, Gemini, Anthropic, …) via a `params.provider` field, so the
+   *  person can pick the provider they actually want instead of being forced into an OpenAI credential. */
+  lockType?: boolean;
   onClose: () => void;
   onCreated: (credential: CreatedCredential) => void;
 }
@@ -27,7 +31,7 @@ interface Props {
  * up the credential it needs. On success, the new credential is immediately
  * selected on the node via onCreated.
  */
-export default function CredentialQuickCreateModal({ defaultType, onClose, onCreated }: Props) {
+export default function CredentialQuickCreateModal({ defaultType, lockType = true, onClose, onCreated }: Props) {
   const [type, setType] = useState<CredentialType>(defaultType ?? 'slack');
   const [name, setName] = useState('');
   const [values, setValues] = useState<Record<string, string>>(defaultFieldValues(defaultType ?? 'slack'));
@@ -87,7 +91,7 @@ export default function CredentialQuickCreateModal({ defaultType, onClose, onCre
           <select
             value={type}
             onChange={(e) => handleTypeChange(e.target.value as CredentialType)}
-            disabled={Boolean(defaultType)}
+            disabled={Boolean(defaultType) && lockType}
             className="focus-ring w-full bg-canvas border border-panelBorder rounded-md px-3 py-2 text-sm disabled:opacity-60"
           >
             {CREDENTIAL_TYPES.map((t) => (
@@ -96,8 +100,13 @@ export default function CredentialQuickCreateModal({ defaultType, onClose, onCre
               </option>
             ))}
           </select>
-          {defaultType && (
+          {defaultType && lockType && (
             <p className="text-muted text-[11px] mt-1">This node requires a {CREDENTIAL_TYPE_META[defaultType].label} credential.</p>
+          )}
+          {defaultType && !lockType && (
+            <p className="text-muted text-[11px] mt-1">
+              This node works with several providers — pick whichever one you have a key for (OpenAI is just the default).
+            </p>
           )}
         </div>
 

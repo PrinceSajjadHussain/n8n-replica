@@ -115,7 +115,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </button>
         )}
       </div>
-      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+      <nav className="flex-1 min-h-0 px-3 py-4 space-y-1 overflow-y-auto">
         {links.map((link) => (
           <Link
             key={link.to}
@@ -170,7 +170,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   );
 
   return (
-    <div className="min-h-screen flex flex-col sm:flex-row">
+    <div className="h-screen flex flex-col sm:flex-row overflow-hidden">
       <ToastViewport />
       <CommandPalette
         open={paletteOpen}
@@ -213,7 +213,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <aside className="w-56 border-r border-panelBorder bg-panel flex flex-col shrink-0">{sidebarContent}</aside>
       )}
 
-      <main className="flex-1 min-w-0 px-4 py-4 sm:px-8 sm:py-8 overflow-auto">{children}</main>
+      <main className="flex-1 min-w-0 min-h-0 px-4 py-4 sm:px-8 sm:py-8 overflow-auto">{children}</main>
     </div>
   );
 }

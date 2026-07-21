@@ -120,7 +120,7 @@ function BinaryPreview({ binary }: { binary: unknown }) {
   const entries = Object.entries(binary as Record<string, BinaryEntry>);
   if (entries.length === 0) return null;
   return (
-    <div className="flex flex-col gap-1.5 mx-3 mt-2">
+    <div className="flex flex-col gap-1.5 mx-3 mt-2 shrink-0">
       {entries.map(([name, entry]) => (
         <BinaryChip key={name} name={name} entry={entry} />
       ))}
@@ -157,10 +157,11 @@ export default function NodeInspectPopover({
 
   return (
     <div
-      className="absolute z-40 top-full mt-2 left-1/2 -translate-x-1/2 w-80 max-h-80 flex flex-col bg-panel border border-panelBorder rounded-lg shadow-xl"
+      className="absolute z-40 top-full mt-2 left-1/2 -translate-x-1/2 w-80 overflow-hidden flex flex-col bg-panel border border-panelBorder rounded-lg shadow-xl"
+      style={{ maxHeight: 'min(28rem, 70vh)' }}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="flex items-center justify-between px-3 py-2 border-b border-panelBorder">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-panelBorder shrink-0">
         <p className="text-xs font-medium truncate">{label}</p>
         <div className="flex items-center gap-2 shrink-0">
           {snapshot.status === 'failed' && onRetry && (
@@ -180,7 +181,7 @@ export default function NodeInspectPopover({
           </button>
         </div>
       </div>
-      <div className="flex items-center gap-3 px-3 pt-2 text-[11px] text-muted">
+      <div className="flex items-center gap-3 px-3 pt-2 text-[11px] text-muted shrink-0">
         {typeof snapshot.durationMs === 'number' && <span>{snapshot.durationMs} ms</span>}
         {typeof snapshot.itemCount === 'number' && (
           <span>
@@ -191,7 +192,7 @@ export default function NodeInspectPopover({
           {snapshot.status}
         </span>
       </div>
-      <div className="flex gap-1 px-3 pt-2">
+      <div className="flex gap-1 px-3 pt-2 shrink-0">
         {(['input', 'output'] as const).map((t) => (
           <button
             key={t}
@@ -242,7 +243,7 @@ export default function NodeInspectPopover({
         </div>
       )}
       {snapshot.expressionErrors && snapshot.expressionErrors.length > 0 && (
-        <div className="mx-3 mb-3 rounded-md border border-alert/40 bg-alert/5 px-2 py-1.5">
+        <div className="mx-3 mb-3 rounded-md border border-alert/40 bg-alert/5 px-2 py-1.5 shrink-0 overflow-y-auto max-h-24">
           <p className="text-[10px] font-medium text-alert mb-1">
             {snapshot.expressionErrors.length} expression error{snapshot.expressionErrors.length === 1 ? '' : 's'}
           </p>

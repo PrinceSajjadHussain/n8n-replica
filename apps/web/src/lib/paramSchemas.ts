@@ -374,6 +374,21 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
   agent: {
     fields: [
       {
+        key: 'provider', label: 'Provider', type: 'enum', default: 'openai',
+        options: [
+          { value: 'openai', label: 'OpenAI' },
+          { value: 'anthropic', label: 'Anthropic' },
+          { value: 'gemini', label: 'Gemini' },
+        ],
+        help: 'Pick which credential type this agent should call. Select the matching credential below (or use "+ New credential" to add one).',
+      },
+      {
+        key: 'model',
+        label: 'Model (optional — provider default if blank)',
+        type: 'string',
+        placeholder: 'e.g. gpt-4o-mini, claude-sonnet-4-5-20250929, gemini-2.0-flash',
+      },
+      {
         key: 'sessionId',
         label: 'Session ID',
         type: 'expression',
@@ -397,7 +412,7 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
         help: 'The user\'s message. Use {{$trigger.message}} — always resolves to the chatTrigger message regardless of how many nodes are between them.',
       },
       {
-        key: 'maxIterations',
+        key: 'maxSteps',
         label: 'Max iterations (tool-call rounds)',
         type: 'number',
         default: 8,
@@ -419,7 +434,7 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
         label: 'Enable long-term memory (vector recall)',
         type: 'boolean',
         default: false,
-        help: 'When enabled, older turns are recalled by semantic search. Requires an OpenAI credential.',
+        help: 'When enabled, older turns are recalled by semantic search. Uses an OpenAI credential/OPENAI_API_KEY for embeddings regardless of the Provider above — safely skipped if none is available.',
       },
       {
         key: 'recallTopK',
