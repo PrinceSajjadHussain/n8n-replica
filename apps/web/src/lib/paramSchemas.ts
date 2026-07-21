@@ -53,6 +53,13 @@ export type ParamField =
   | (FieldBase & {
       type: 'enum';
       options: EnumOption[];
+      /** When set, options are fetched from GET /integrations/:nodeType/resources/:loadOptionsFrom
+       *  instead of (or in addition to, as a fallback while loading/on error) the static `options`
+       *  above. Same resource-key convention as the 'resource' field type below. */
+      loadOptionsFrom?: string;
+      /** Optional key of another field in the same params object whose current value is sent as
+       *  `?filter=` when fetching loadOptionsFrom — e.g. github.labels needs the chosen repo. */
+      loadOptionsFilterFromKey?: string;
     })
   | (FieldBase & {
       type: 'object';
@@ -61,6 +68,8 @@ export type ParamField =
       type: 'array';
       itemFields: ParamField[];
       itemLabel?: string;
+      minItems?: number;
+      maxItems?: number;
     })
   | (FieldBase & {
       type: 'json';
@@ -70,6 +79,23 @@ export type ParamField =
       type: 'resource';
       resource: string;
       nodeType?: string;
+      /** Key of another field in the same params object whose value is sent as `?filter=` to the
+       *  list endpoint — e.g. trello listId scoped to the chosen boardId. */
+      filterFromKey?: string;
+      /** Which of List/URL/ID tabs to show. Defaults to ['list', 'id'] in the component —
+       *  only set 'url' here when this resource's URLs have a clean, extractable ID. */
+      modes?: Array<'list' | 'url' | 'id'>;
+      /** Regex (one capture group) run against a pasted URL to pull out the ID — e.g. Trello
+       *  board URLs are `https://trello.com/b/<id>/<slug>`. Falls back to the URL's last path
+       *  segment when omitted. */
+      urlExtractRegex?: string;
+      /** For pickers whose selected value is a compound "a/b" id (e.g. GitHub's
+       *  "owner/repo" full_name) that the node's executor actually wants as two separate
+       *  plain-string params, not one resourceLocator object. When set, this field stores
+       *  nothing itself — it's a picker-only convenience that splits the chosen value on
+       *  '/' and writes the two halves into `ownerKey`/`nameKey`, which stay ordinary
+       *  `string` fields elsewhere in the schema for manual editing/visibility. */
+      splitInto?: { ownerKey: string; nameKey: string };
     });
 export interface ParamSchema {
   fields: ParamField[];
@@ -266,6 +292,81 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
         type: 'text',
         placeholder: 'name: string, email: string, orderTotal: number, isUrgent: boolean',
         help: 'Plain-English field list — one JSON object with these keys comes back, null for any field not found in the text.',
+      },
+    ],
+  },
+
+  embeddingProvider: {
+    fields: [
+      {
+        key: 'provider',
+        label: 'Provider',
+        type: 'enum',
+        default: 'openai',
+        options: [
+          { value: 'openai', label: 'OpenAI (text-embedding-3-small)' },
+          { value: 'gemini', label: 'Google Gemini (text-embedding-004)' },
+        ],
+      },
+    ],
+  },
+
+  textSplitterConfig: {
+    fields: [
+      {
+        key: 'strategy',
+        label: 'Splitting strategy',
+        type: 'enum',
+        default: 'fixed',
+        options: [
+          { value: 'fixed', label: 'Fixed size' },
+          { value: 'token', label: 'Token-aware' },
+          { value: 'markdown', label: 'Markdown-aware' },
+          { value: 'semantic', label: 'Semantic' },
+        ],
+      },
+      { key: 'chunkSize', label: 'Chunk size (chars)', type: 'number', default: 1000 },
+      { key: 'chunkOverlap', label: 'Chunk overlap (chars)', type: 'number', default: 200 },
+    ],
+  },
+
+  vectorStoreConfig: {
+    fields: [
+      {
+        key: 'store',
+        label: 'Store',
+        type: 'enum',
+        default: 'json',
+        options: [
+          { value: 'json', label: 'Built-in (JSON, no setup)' },
+          { value: 'pgvector', label: 'Postgres (pgvector)' },
+          { value: 'pinecone', label: 'Pinecone' },
+          { value: 'qdrant', label: 'Qdrant' },
+          { value: 'weaviate', label: 'Weaviate' },
+        ],
+      },
+      { key: 'namespace', label: 'Namespace', type: 'string', default: 'default', help: 'Documents ingested and queried under the same namespace share the same index.' },
+    ],
+  },
+
+  agentTool: {
+    fields: [
+      { key: 'name', label: 'Tool name (shown to the model)', type: 'string', placeholder: 'search_web' },
+      { key: 'description', label: 'Description (tells the model when to use it)', type: 'text', placeholder: 'Searches the web and returns results' },
+      { key: 'nodeType', label: 'Node type to run', type: 'string', placeholder: 'httpRequest', help: 'Any registered node type, e.g. httpRequest, code, ragQuery.' },
+      {
+        key: 'nodeParams',
+        label: 'Static params (JSON)',
+        type: 'text',
+        placeholder: '{ "url": "https://api.example.com/search" }',
+        help: 'Params always merged in for every call to this tool (e.g. a fixed URL or channel).',
+      },
+      {
+        key: 'parameters',
+        label: 'Arguments JSON schema (properties)',
+        type: 'text',
+        placeholder: '{ "query": { "type": "string", "description": "search text" } }',
+        help: 'What the model may pass in when it calls this tool \u2014 merged over the static params above. Leave as {} for a no-argument tool.',
       },
     ],
   },
@@ -1176,7 +1277,27 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
           { value: 'addComment', label: 'Add comment' },
         ],
       },
-      { key: 'listId', label: 'List ID', type: 'string', placeholder: '5f8...', visibleIf: (p) => (p.action ?? 'createCard') === 'createCard' },
+      {
+        key: 'boardId',
+        label: 'Board',
+        type: 'resource',
+        resource: 'boards',
+        nodeType: 'trello',
+        modes: ['list', 'url', 'id'],
+        urlExtractRegex: 'trello\\.com/b/([a-zA-Z0-9]+)',
+        placeholder: '5f8... (used to filter the List picker below)',
+        visibleIf: (p) => (p.action ?? 'createCard') === 'createCard',
+      },
+      {
+        key: 'listId',
+        label: 'List',
+        type: 'resource',
+        resource: 'lists',
+        nodeType: 'trello',
+        filterFromKey: 'boardId',
+        placeholder: '5f8...',
+        visibleIf: (p) => (p.action ?? 'createCard') === 'createCard',
+      },
       { key: 'name', label: 'Card title', type: 'expression', placeholder: 'New card', visibleIf: (p) => (p.action ?? 'createCard') === 'createCard' },
       { key: 'desc', label: 'Description', type: 'expression', visibleIf: (p) => (p.action ?? 'createCard') === 'createCard' },
       { key: 'cardId', label: 'Card ID', type: 'string', placeholder: '5f8...', visibleIf: (p) => p.action === 'getCard' || p.action === 'addComment' },
@@ -1197,7 +1318,17 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
           { value: 'addComment', label: 'Add comment' },
         ],
       },
-      { key: 'projectKey', label: 'Project key', type: 'string', placeholder: 'ENG', visibleIf: (p) => (p.action ?? 'createIssue') === 'createIssue' },
+      {
+        key: 'projectKey',
+        label: 'Project',
+        type: 'resource',
+        resource: 'projects',
+        nodeType: 'jira',
+        modes: ['list', 'url', 'id'],
+        urlExtractRegex: '/projects/([A-Za-z0-9]+)',
+        placeholder: 'ENG',
+        visibleIf: (p) => (p.action ?? 'createIssue') === 'createIssue',
+      },
       { key: 'summary', label: 'Summary', type: 'expression', placeholder: 'New issue', visibleIf: (p) => (p.action ?? 'createIssue') === 'createIssue' },
       {
         key: 'issueType',
@@ -1213,6 +1344,46 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
       },
       { key: 'issueKey', label: 'Issue key', type: 'string', placeholder: 'ENG-123', visibleIf: (p) => p.action === 'getIssue' || p.action === 'addComment' },
       { key: 'content', label: 'Comment text', type: 'expression', visibleIf: (p) => p.action === 'addComment' },
+    ],
+  },
+
+  github: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'listIssues',
+        options: [
+          { value: 'listIssues', label: 'List issues' },
+          { value: 'createIssue', label: 'Create issue' },
+          { value: 'commentOnIssue', label: 'Comment on issue' },
+          { value: 'getFile', label: 'Get file' },
+        ],
+      },
+      {
+        key: 'repoPicker',
+        label: 'Repository',
+        type: 'resource',
+        resource: 'repos',
+        nodeType: 'github',
+        modes: ['list', 'url', 'id'],
+        urlExtractRegex: 'github\\.com/([^/]+/[^/]+)',
+        placeholder: 'owner/repo',
+        help: 'Picks the Owner and Repo fields below for you — or just type/paste them there directly.',
+        splitInto: { ownerKey: 'owner', nameKey: 'repo' },
+      },
+      { key: 'owner', label: 'Owner', type: 'string', placeholder: 'octocat' },
+      { key: 'repo', label: 'Repo', type: 'string', placeholder: 'hello-world' },
+      {
+        key: 'issueNumber',
+        label: 'Issue number',
+        type: 'number',
+        visibleIf: (p) => p.action === 'commentOnIssue',
+      },
+      { key: 'title', label: 'Title', type: 'expression', placeholder: 'Bug: ...', visibleIf: (p) => p.action === 'createIssue' },
+      { key: 'body', label: 'Body', type: 'expression', visibleIf: (p) => p.action === 'createIssue' || p.action === 'commentOnIssue' },
+      { key: 'path', label: 'File path', type: 'string', placeholder: 'README.md', visibleIf: (p) => p.action === 'getFile' },
     ],
   },
 
@@ -1319,7 +1490,7 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
   mongodb: {
     fields: [
       { key: 'database', label: 'Database', type: 'string', placeholder: 'mydb' },
-      { key: 'collection', label: 'Collection', type: 'string', placeholder: 'orders' },
+      { key: 'collection', label: 'Collection', type: 'resource', resource: 'collections', nodeType: 'mongodb', placeholder: 'orders' },
       {
         key: 'action',
         label: 'Action',
@@ -1401,7 +1572,16 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
           { value: 'addComment', label: 'Add comment' },
         ],
       },
-      { key: 'projectId', label: 'Project ID', type: 'string', visibleIf: (p) => ['createTask', 'listTasksInProject'].includes(String(p.action ?? 'createTask')) },
+      {
+        key: 'projectId',
+        label: 'Project',
+        type: 'resource',
+        resource: 'projects',
+        nodeType: 'asana',
+        modes: ['list', 'url', 'id'],
+        urlExtractRegex: '/0/(\\d+)',
+        visibleIf: (p) => ['createTask', 'listTasksInProject'].includes(String(p.action ?? 'createTask')),
+      },
       { key: 'name', label: 'Task name', type: 'expression', visibleIf: (p) => ['createTask', 'updateTask'].includes(String(p.action ?? 'createTask')) },
       { key: 'notes', label: 'Notes', type: 'expression', visibleIf: (p) => ['createTask', 'updateTask'].includes(String(p.action ?? 'createTask')) },
       { key: 'completed', label: 'Completed', type: 'boolean', default: false, visibleIf: (p) => p.action === 'updateTask' },
@@ -1424,7 +1604,16 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
           { value: 'listTasksInList', label: 'List tasks in list' },
         ],
       },
-      { key: 'listId', label: 'List ID', type: 'string', visibleIf: (p) => ['createTask', 'listTasksInList'].includes(String(p.action ?? 'createTask')) },
+      {
+        key: 'listId',
+        label: 'List',
+        type: 'resource',
+        resource: 'lists',
+        nodeType: 'clickup',
+        modes: ['list', 'url', 'id'],
+        urlExtractRegex: '/li/(\\d+)',
+        visibleIf: (p) => ['createTask', 'listTasksInList'].includes(String(p.action ?? 'createTask')),
+      },
       { key: 'name', label: 'Task name', type: 'expression', visibleIf: (p) => ['createTask', 'updateTask'].includes(String(p.action ?? 'createTask')) },
       { key: 'description', label: 'Description', type: 'expression', visibleIf: (p) => ['createTask', 'updateTask'].includes(String(p.action ?? 'createTask')) },
       { key: 'status', label: 'Status', type: 'string', placeholder: 'in progress', visibleIf: (p) => ['createTask', 'updateTask'].includes(String(p.action ?? 'createTask')) },
@@ -1445,7 +1634,16 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
           { value: 'updateIssue', label: 'Update issue' },
         ],
       },
-      { key: 'teamId', label: 'Team ID', type: 'string', visibleIf: (p) => (p.action ?? 'createIssue') === 'createIssue' },
+      {
+        key: 'teamId',
+        label: 'Team',
+        type: 'resource',
+        resource: 'teams',
+        nodeType: 'linear',
+        modes: ['list', 'url', 'id'],
+        urlExtractRegex: '/team/([a-zA-Z0-9-]+)',
+        visibleIf: (p) => (p.action ?? 'createIssue') === 'createIssue',
+      },
       { key: 'title', label: 'Title', type: 'expression', visibleIf: (p) => ['createIssue', 'updateIssue'].includes(String(p.action ?? 'createIssue')) },
       { key: 'description', label: 'Description', type: 'expression', visibleIf: (p) => ['createIssue', 'updateIssue'].includes(String(p.action ?? 'createIssue')) },
       { key: 'stateId', label: 'State ID', type: 'string', visibleIf: (p) => p.action === 'updateIssue' },

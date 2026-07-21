@@ -218,6 +218,18 @@ const PORTS_BY_NODE_TYPE: Record<string, NodePorts> = {
   agentMemory: { inputs: [], outputs: [{ id: 'memory', type: NodeConnectionTypes.AiMemory }] },
   redisMemory: { inputs: [], outputs: [{ id: 'memory', type: NodeConnectionTypes.AiMemory }] },
 
+  // Config-only sub-nodes for RAG (embedding / text splitter / vector store)
+  // and Agent (tool). These have no main pipe — they just carry configuration
+  // upward into whatever they're plugged into (mirrors the openai/gemini/etc.
+  // "provider" sub-nodes above). Previously there was NO node type at all
+  // that output ai_embedding/ai_textSplitter/ai_vectorStore/ai_tool, so the
+  // "Pick a node to plug into Embedding/Text Splitter/Vector Store/Tool"
+  // picker always came back with zero real matches.
+  embeddingProvider: { inputs: [], outputs: [{ id: 'embedding', type: NodeConnectionTypes.AiEmbedding }] },
+  textSplitterConfig: { inputs: [], outputs: [{ id: 'textSplitter', type: NodeConnectionTypes.AiTextSplitter }] },
+  vectorStoreConfig: { inputs: [], outputs: [{ id: 'vectorStore', type: NodeConnectionTypes.AiVectorStore }] },
+  agentTool: { inputs: [], outputs: [{ id: 'tool', type: NodeConnectionTypes.AiTool }] },
+
   structuredOutputParser: { inputs: [], outputs: [{ id: 'outputParser', type: NodeConnectionTypes.AiOutputParser }] },
   autoFixingOutputParser: {
     inputs: [{ id: 'model', type: NodeConnectionTypes.AiLanguageModel, maxConnections: 1 }],

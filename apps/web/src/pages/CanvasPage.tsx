@@ -825,7 +825,7 @@ function CanvasPageDesktop() {
       const wf = data.workflow as {
         name?: string;
         nodes: Array<{ id: string; type: string; position?: { x: number; y: number }; params?: Record<string, unknown> }>;
-        edges: Array<{ id: string; source: string; target: string; sourceHandle?: string | null }>;
+        edges: Array<{ id: string; source: string; target: string; sourceHandle?: string | null; targetHandle?: string | null }>;
       };
       if (wf.name) setName(wf.name);
       setNodes(
@@ -848,6 +848,7 @@ function CanvasPageDesktop() {
           source: e.source,
           target: e.target,
           sourceHandle: e.sourceHandle ?? undefined,
+          targetHandle: e.targetHandle ?? undefined,
         }))
       );
       setAiModalOpen(false);
@@ -1264,6 +1265,30 @@ function CanvasPageDesktop() {
             isWorkflowActive={isActive}
             lastRunOutput={selectedNode.data.lastRunOutput}
             lastRunInput={selectedNode.data.lastRunInput}
+            upstreamNodes={(() => {
+              // BFS backwards over edges to collect every ancestor node (not
+              // just direct parents), each with its own last-run output —
+              // powers the "reference any upstream node" dropdown so a node
+              // three steps downstream can still pull fields straight from
+              // e.g. the original HTTP Request, not only its immediate parent.
+              const result: { id: string; label: string; output: unknown }[] = [];
+              const seen = new Set<string>([selectedNode.id]);
+              const queue = [selectedNode.id];
+              while (queue.length > 0) {
+                const current = queue.shift()!;
+                const parents = edges.filter((e) => e.target === current).map((e) => e.source);
+                for (const pid of parents) {
+                  if (seen.has(pid)) continue;
+                  seen.add(pid);
+                  const pNode = nodes.find((n) => n.id === pid);
+                  if (pNode) {
+                    result.push({ id: pNode.id, label: pNode.data.label, output: pNode.data.lastRunOutput });
+                    queue.push(pid);
+                  }
+                }
+              }
+              return result;
+            })()}
             upstreamOutput={(() => {
               const incoming = edges.filter((e) => e.target === selectedNode.id);
               if (incoming.length === 0) return undefined;

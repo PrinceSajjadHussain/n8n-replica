@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import ExpressionAutocomplete, { type ExpressionSuggestion } from './ExpressionAutocomplete';
 import ExpressionEditorInput from './ExpressionEditorInput';
 import ResourceLocatorInput from './ResourceLocatorInput';
+import { api } from '../lib/api';
 import type { ParamField, ParamSchema } from '../lib/paramSchemas';
 import { describeCron, isValidCron, nextRuns } from '../lib/cronUtils';
 
@@ -124,7 +125,19 @@ function FieldControl({
           {field.label}
         </label>
       );
-    case 'enum':
+    case 'enum': {
+      if (field.loadOptionsFrom) {
+        return (
+          <DynamicEnumField
+            field={field}
+            value={value}
+            params={params}
+            nodeType={nodeType}
+            credentialId={credentialId}
+            onChange={(v) => onChange(setField(params, field.key, v))}
+          />
+        );
+      }
       return (
         <div>
           <label className={labelClass}>{field.label}</label>
@@ -142,6 +155,7 @@ function FieldControl({
           {field.help && <p className={helpClass}>{field.help}</p>}
         </div>
       );
+    }
     case 'object': {
       const obj = (typeof value === 'object' && value && !Array.isArray(value) ? (value as Record<string, unknown>) : {}) as Record<string, unknown>;
       const rows = Object.entries(obj);
@@ -208,13 +222,43 @@ function FieldControl({
               <div key={i} className="border border-panelBorder rounded-md p-2 bg-canvas">
                 <div className="flex justify-between items-center mb-1">
                   <span className="text-[10px] text-muted uppercase">{field.itemLabel ?? 'item'} {i + 1}</span>
-                  <button
-                    type="button"
-                    onClick={() => commit(items.filter((_, ri) => ri !== i))}
-                    className="focus-ring text-xs text-muted hover:text-alert px-1"
-                  >
-                    ✕
-                  </button>
+                  <div className="flex items-center gap-0.5">
+                    <button
+                      type="button"
+                      disabled={i === 0}
+                      onClick={() => {
+                        const next = [...items];
+                        [next[i - 1], next[i]] = [next[i], next[i - 1]];
+                        commit(next);
+                      }}
+                      title="Move up"
+                      className="focus-ring text-xs text-muted hover:text-ink px-1 disabled:opacity-30 disabled:hover:text-muted"
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      disabled={i === items.length - 1}
+                      onClick={() => {
+                        const next = [...items];
+                        [next[i], next[i + 1]] = [next[i + 1], next[i]];
+                        commit(next);
+                      }}
+                      title="Move down"
+                      className="focus-ring text-xs text-muted hover:text-ink px-1 disabled:opacity-30 disabled:hover:text-muted"
+                    >
+                      ↓
+                    </button>
+                    <button
+                      type="button"
+                      disabled={items.length <= (field.minItems ?? 0)}
+                      onClick={() => commit(items.filter((_, ri) => ri !== i))}
+                      title={items.length <= (field.minItems ?? 0) ? `At least ${field.minItems} required` : undefined}
+                      className="focus-ring text-xs text-muted hover:text-alert px-1 disabled:opacity-30 disabled:hover:text-muted"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 </div>
                 <div className="grid gap-1.5">
                   {field.itemFields.map((sub) => (
@@ -239,11 +283,18 @@ function FieldControl({
           </div>
           <button
             type="button"
+            disabled={field.maxItems !== undefined && items.length >= field.maxItems}
             onClick={() => commit([...items, {}])}
-            className="focus-ring text-xs mt-1.5 px-2 py-1 rounded-md border border-panelBorder text-muted hover:text-ink"
+            className="focus-ring text-xs mt-1.5 px-2 py-1 rounded-md border border-panelBorder text-muted hover:text-ink disabled:opacity-30 disabled:hover:text-muted"
           >
             + Add {field.itemLabel ?? 'item'}
           </button>
+          {field.minItems !== undefined && items.length < field.minItems && (
+            <p className={errorClass}>At least {field.minItems} {field.itemLabel ?? 'item'}{field.minItems === 1 ? '' : 's'} required.</p>
+          )}
+          {field.maxItems !== undefined && items.length >= field.maxItems && (
+            <p className={helpClass}>Maximum of {field.maxItems} reached.</p>
+          )}
           {field.help && <p className={helpClass}>{field.help}</p>}
         </div>
       );
@@ -252,18 +303,64 @@ function FieldControl({
       // ResourceLocatorInput: pick an external resource by name/id via a
       // small list endpoint, or type the ID directly. Needs field.resource
       // (e.g. 'files') and field.nodeType (e.g. 'googleDrive') in paramSchemas.
-      const resourceNodeType = (field as any).nodeType ?? nodeType ?? '';
-      const resourceName = (field as any).resource ?? field.key;
+      const resourceNodeType = field.nodeType ?? nodeType ?? '';
+      const resourceName = field.resource ?? field.key;
+      // Dependent pickers (e.g. Trello listId scoped to the chosen boardId) re-fetch
+      // whenever the field they depend on changes — keyed remount is the simplest way
+      // to force ResourceLocatorInput to drop its cached list and reload for the new filter.
+      // Note: the filter field itself is always a plain string/legacy id even when it's
+      // also a resource field, since boardId etc. store { mode, value, ... } — read .value.
+      const filterFieldValue = field.filterFromKey ? params[field.filterFromKey] : undefined;
+      const filterValue =
+        filterFieldValue && typeof filterFieldValue === 'object' && 'value' in (filterFieldValue as Record<string, unknown>)
+          ? String((filterFieldValue as Record<string, unknown>).value ?? '')
+          : filterFieldValue == null
+            ? ''
+            : String(filterFieldValue);
+
+      // splitInto fields (e.g. GitHub's owner/repo picker) don't store anything under
+      // field.key at all — they're a convenience picker over two ordinary string params.
+      // Reconstruct the "owner/repo"-style display value from those two params, and on
+      // selection write the two halves straight back into them instead of field.key.
+      const displayValue = field.splitInto
+        ? (() => {
+            const owner = params[field.splitInto!.ownerKey];
+            const name = params[field.splitInto!.nameKey];
+            return owner && name ? `${owner}/${name}` : '';
+          })()
+        : value;
+      const handleChange = field.splitInto
+        ? (v: { value: string }) => {
+            const [ownerPart, ...rest] = String(v.value ?? '').split('/');
+            const namePart = rest.join('/');
+            onChange({
+              ...setField(params, field.splitInto!.ownerKey, ownerPart || ''),
+              [field.splitInto!.nameKey]: namePart || '',
+            });
+          }
+        : (v: unknown) => onChange(setField(params, field.key, v));
+
       return (
-        <ResourceLocatorInput
-          nodeType={resourceNodeType}
-          resource={resourceName}
-          credentialId={credentialId ?? null}
-          value={value == null ? '' : String(value)}
-          label={field.label}
-          placeholder={field.placeholder}
-          onChange={(v) => onChange(setField(params, field.key, v))}
-        />
+        <div>
+          <ResourceLocatorInput
+            key={field.filterFromKey ? `${field.key}:${filterValue}` : field.key}
+            nodeType={resourceNodeType}
+            resource={resourceName}
+            filter={filterValue || undefined}
+            modes={field.modes}
+            urlExtractRegex={field.urlExtractRegex}
+            credentialId={credentialId ?? null}
+            value={displayValue}
+            label={field.label}
+            placeholder={
+              field.filterFromKey && !filterValue
+                ? `Select a ${field.filterFromKey} first`
+                : field.placeholder
+            }
+            onChange={handleChange}
+          />
+          {field.help && <p className={helpClass}>{field.help}</p>}
+        </div>
       );
     }
     case 'json': {
@@ -273,6 +370,95 @@ function FieldControl({
     default:
       return null;
   }
+}
+
+/** Enum field backed by GET /integrations/:nodeType/resources/:loadOptionsFrom (Task 4) —
+ *  same endpoint/shape ResourceLocatorInput uses. Falls back to a plain text input if the
+ *  fetch fails or no credential is selected yet, so the field is never a dead end. */
+function DynamicEnumField({
+  field,
+  value,
+  params,
+  nodeType,
+  credentialId,
+  onChange,
+}: {
+  field: Extract<ParamField, { type: 'enum' }>;
+  value: unknown;
+  params: Record<string, unknown>;
+  nodeType?: string;
+  credentialId?: string | null;
+  onChange: (value: string) => void;
+}) {
+  const [items, setItems] = useState<{ value: string; name: string }[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const filterValue = field.loadOptionsFilterFromKey ? String(params[field.loadOptionsFilterFromKey] ?? '') : '';
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!credentialId) {
+      setItems(null);
+      setFailed(false);
+      return;
+    }
+    setLoading(true);
+    setFailed(false);
+    api
+      .get(`/integrations/${nodeType}/resources/${field.loadOptionsFrom}`, {
+        params: { credentialId, ...(filterValue ? { filter: filterValue } : {}) },
+      })
+      .then(({ data }) => {
+        if (!cancelled) setItems(data.items ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodeType, field.loadOptionsFrom, credentialId, filterValue]);
+
+  if (!credentialId || failed || (items !== null && items.length === 0 && !loading)) {
+    // No credential, fetch failed, or nothing came back — fall back to plain text entry.
+    return (
+      <div>
+        <label className={labelClass}>{field.label}</label>
+        <input
+          type="text"
+          value={value == null ? '' : String(value)}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={!credentialId ? 'Select a credential first' : field.placeholder}
+          className={inputClass}
+        />
+        {field.help && <p className={helpClass}>{field.help}</p>}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <label className={labelClass}>{field.label}</label>
+      <select
+        value={value == null ? '' : String(value)}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={loading}
+        className={inputClass}
+      >
+        <option value="">{loading ? 'Loading…' : 'Select…'}</option>
+        {(items ?? []).map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.name}
+          </option>
+        ))}
+      </select>
+      {field.help && <p className={helpClass}>{field.help}</p>}
+    </div>
+  );
 }
 
 /** Isolated so the raw text can diverge from the parsed value while the user is mid-edit, without losing keystrokes. */
@@ -373,6 +559,7 @@ export default function ParamForm({
           isWorkflowActive={isWorkflowActive}
         />
       )}
+      {nodeType === 'set' && <SetGuidedExtras params={params} onChange={onChange} mockInput={mockInput} />}
       {nodeType === 'schedule' && <ScheduleGuidedExtras params={params} />}
       {nodeType === 'httpRequest' && <HttpRequestGuidedExtras params={params} onChange={onChange} />}
       {nodeType === 'openai' && (
@@ -549,6 +736,49 @@ function ChatGuidedExtras({
         </p>
       )}
     </div>
+  );
+}
+
+/** "Map all fields" — one-click bulk-insert of a mapping row per top-level key in the
+ *  upstream item, matching n8n's Set-node shortcut (Task 6). Flattens one level only:
+ *  nested objects/arrays pass through as a single value via sourcePath, not expanded. */
+function SetGuidedExtras({
+  params,
+  onChange,
+  mockInput,
+}: {
+  params: Record<string, unknown>;
+  onChange: (params: Record<string, unknown>) => void;
+  mockInput?: unknown;
+}) {
+  // mockInput is either the raw upstream item or an object with a `.json` envelope,
+  // depending on what NodeConfigPanel last pinned/ran — accept either shape.
+  const upstreamJson =
+    mockInput && typeof mockInput === 'object' && 'json' in (mockInput as Record<string, unknown>)
+      ? (mockInput as Record<string, unknown>).json
+      : mockInput;
+  const topLevelKeys =
+    upstreamJson && typeof upstreamJson === 'object' && !Array.isArray(upstreamJson)
+      ? Object.keys(upstreamJson as Record<string, unknown>)
+      : [];
+
+  if (topLevelKeys.length === 0) return null;
+
+  function mapAllFields() {
+    const existing = Array.isArray(params.mappings) ? (params.mappings as Record<string, unknown>[]) : [];
+    const generated = topLevelKeys.map((key) => ({ targetPath: key, sourcePath: key }));
+    const next = existing.length === 0 ? generated : [...existing, ...generated];
+    onChange(setField(params, 'mappings', next));
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={mapAllFields}
+      className="focus-ring text-xs px-2 py-1 rounded-md border border-panelBorder text-muted hover:text-ink w-fit"
+    >
+      ↧ Map all fields from upstream
+    </button>
   );
 }
 

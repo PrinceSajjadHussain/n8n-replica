@@ -117,6 +117,10 @@ export const NODE_DEFAULT_PARAMS: Record<string, Record<string, unknown>> = {
   agentOrchestrator: { strategy: 'sequential' },
   ragIngest: { embeddingProvider: 'openai', chunkSize: 1000, chunkOverlap: 150 },
   ragQuery: { embeddingProvider: 'openai', topK: 5 },
+  embeddingProvider: { provider: 'openai' },
+  textSplitterConfig: { strategy: 'fixed', chunkSize: 1000, chunkOverlap: 200 },
+  vectorStoreConfig: { store: 'json', namespace: 'default' },
+  agentTool: { name: 'my_tool', description: 'Describe what this tool does and when the model should call it.', nodeType: 'httpRequest', nodeParams: '{}', parameters: '{}' },
   browserAutomation: {
     url: 'https://example.com',
     steps: [{ action: 'click', selector: '#login' }],

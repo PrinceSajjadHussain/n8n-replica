@@ -38,6 +38,7 @@ import './sentimentAnalysisNode';
 import './entityExtractorNode';
 import './summarizerNode';
 import './qaChainNode';
+import './subConfigNodes';
 import './structuredOutputParserNode';
 import './autoFixingOutputParserNode';
 import './ragNode';

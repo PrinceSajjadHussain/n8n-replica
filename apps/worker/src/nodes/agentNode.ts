@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { NODE_REGISTRY, registerNode } from './types';
 import type { NodePlugin, NodeExecutionContext } from './types';
+import { readRedisTurns, appendRedisTurns } from './redisMemoryNode';
 
 /**
  * AGENT MEMORY
@@ -250,13 +251,43 @@ export const agentNode: NodePlugin = {
     const sessionId = String(params.sessionId ?? 'default');
     const model = String(params.model ?? 'gpt-4o-mini');
     const maxSteps = Number(params.maxSteps ?? 6);
-    const tools = (params.tools as AgentToolSpec[]) ?? [];
+    // Tools come from two places: the flat params.tools array (set directly
+    // in the form) and any agentTool sub-nodes wired into the Agent's "Tool"
+    // port (see executor.ts's $subNodes resolution + subConfigNodes.ts) —
+    // both are supported so existing workflows built before the Tool
+    // sub-node existed keep working.
+    const subNodes = (params.$subNodes ?? {}) as Record<string, any>;
+    const toolSubNodesRaw = subNodes.tool;
+    const toolSubNodes: any[] = toolSubNodesRaw == null ? [] : Array.isArray(toolSubNodesRaw) ? toolSubNodesRaw : [toolSubNodesRaw];
+    const toolsFromSubNodes: AgentToolSpec[] = toolSubNodes.map((t) => ({
+      name: String(t.name ?? 'tool'),
+      nodeType: String(t.nodeType ?? 'httpRequest'),
+      description: String(t.description ?? ''),
+      parameters: (t.parameters as Record<string, unknown>) ?? {},
+      staticParams: (t.nodeParams as Record<string, unknown>) ?? {},
+    }));
+    const tools = [...((params.tools as AgentToolSpec[]) ?? []), ...toolsFromSubNodes];
     const userPrompt = String(params.prompt ?? '');
     const recentTurns = Number(params.recentTurns ?? 12);
     const longTermMemoryEnabled = params.longTermMemory !== false;
     const recallTopK = Number(params.recallTopK ?? 4);
 
-    const fullHistory = readMemory(sessionId);
+    // If a Redis Chat Memory node is wired into this Agent's "Memory" port,
+    // use it for short-term history instead of the local per-worker JSON
+    // file — this is what makes that connection (see image showing Agent ->
+    // Memory: Redis Chat Memory) actually shared across worker instances
+    // instead of being a purely decorative wire. Long-term semantic recall
+    // below still requires the local embedding store, so it's skipped in
+    // Redis mode (Redis turns aren't embedded) — short-term history alone
+    // still works fully.
+    const memorySub = subNodes.memory as Record<string, unknown> | undefined;
+    const useRedisMemory = memorySub?.$nodeType === 'redisMemory';
+
+    const fullHistory: MemoryTurn[] = useRedisMemory
+      ? (await readRedisTurns(sessionId, 500))
+          .filter((t) => t.role === 'user' || t.role === 'assistant')
+          .map((t) => ({ role: t.role as 'user' | 'assistant', content: t.content, at: t.at }))
+      : readMemory(sessionId);
     const recentHistory = recentTurns > 0 ? fullHistory.slice(-recentTurns) : fullHistory;
 
     // Long-term vector recall: search the ENTIRE session history (not just
@@ -331,14 +362,21 @@ export const agentNode: NodePlugin = {
       }
     }
 
-    await appendMemoryWithEmbeddings(
-      sessionId,
-      [
-        { role: 'user', content: userPrompt, at: new Date().toISOString() },
-        { role: 'assistant', content: finalText, at: new Date().toISOString() },
-      ],
-      apiKey
-    );
+    if (useRedisMemory) {
+      await appendRedisTurns(sessionId, [
+        { role: 'user', content: userPrompt },
+        { role: 'assistant', content: finalText },
+      ]);
+    } else {
+      await appendMemoryWithEmbeddings(
+        sessionId,
+        [
+          { role: 'user', content: userPrompt, at: new Date().toISOString() },
+          { role: 'assistant', content: finalText, at: new Date().toISOString() },
+        ],
+        apiKey
+      );
+    }
 
     return {
       output: {

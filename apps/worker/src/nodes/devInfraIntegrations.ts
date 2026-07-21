@@ -2,6 +2,7 @@ import axios from 'axios';
 import { registerNode } from './types';
 import type { NodePlugin } from './types';
 import { wrapIntegrationError } from './integrationErrors';
+import { rlValue } from './resourceLocatorValue';
 
 /**
  * mongodb — NoSQL counterpart to the Postgres node. Connects fresh per
@@ -25,7 +26,7 @@ export const mongodbNode: NodePlugin = {
     if (!connectionString)
       throw new Error('mongodb node: requires a "mongodb" credential with { "connectionString": "mongodb+srv://..." }');
     const database = String(params.database ?? '');
-    const collection = String(params.collection ?? '');
+    const collection = String(rlValue(params.collection) ?? '');
     if (!database || !collection) throw new Error('mongodb node: "database" and "collection" params are required');
     const action = String(params.action ?? 'find');
 

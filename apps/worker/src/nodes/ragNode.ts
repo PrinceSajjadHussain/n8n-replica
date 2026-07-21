@@ -240,10 +240,19 @@ async function resolveDocuments(
 export const ragIngestNode: NodePlugin = {
   type: 'ragIngest',
   async execute({ items, params, credential, getBinary }) {
-    const embeddingProvider = (String(params.embeddingProvider ?? 'openai') as EmbeddingProvider);
+    // Sub-node overrides — see executor.ts's $subNodes resolution. Falls back
+    // to the flat params (embeddingProvider/chunking/vectorStore) when no
+    // Embedding/Text Splitter/Vector Store node is actually wired in, so
+    // existing workflows built before those sub-nodes existed keep working.
+    const subNodes = (params.$subNodes ?? {}) as Record<string, any>;
+    const embeddingSub = subNodes.embedding as { provider?: string } | undefined;
+    const textSplitterSub = subNodes.textSplitter as { strategy?: string; chunkSize?: number; chunkOverlap?: number } | undefined;
+    const vectorStoreSub = subNodes.vectorStore as { store?: string; namespace?: string } | undefined;
+
+    const embeddingProvider = (String(embeddingSub?.provider ?? params.embeddingProvider ?? 'openai') as EmbeddingProvider);
     const apiKey = resolveProviderApiKey(embeddingProvider, credential);
 
-    const namespace = String(params.namespace ?? 'default');
+    const namespace = String(vectorStoreSub?.namespace ?? params.namespace ?? 'default');
     const docs = await resolveDocuments(params, items, credential, getBinary);
     if (docs.length === 0) return { output: { ingested: 0, namespace } };
 
@@ -251,7 +260,12 @@ export const ragIngestNode: NodePlugin = {
     const docsWithMeta = docs.map((d, i) => ({ ...d, meta: { ...d.meta, docId: `${namespace}-${Date.now()}-${i}`, ...extraMeta } }));
 
     const chunkingParams = (params.chunking ?? {}) as Partial<ChunkingOptions>;
-    const chunkingOpts: ChunkingOptions = { strategy: (chunkingParams.strategy as ChunkingOptions['strategy']) ?? 'token', ...chunkingParams };
+    const chunkingOpts: ChunkingOptions = {
+      strategy: (textSplitterSub?.strategy as ChunkingOptions['strategy']) ?? (chunkingParams.strategy as ChunkingOptions['strategy']) ?? 'token',
+      ...chunkingParams,
+      ...(textSplitterSub?.chunkSize != null ? { chunkSize: textSplitterSub.chunkSize } : {}),
+      ...(textSplitterSub?.chunkOverlap != null ? { chunkOverlap: textSplitterSub.chunkOverlap } : {}),
+    };
 
     const embedFn = (texts: string[]) => embed(embeddingProvider, apiKey, texts);
     const allChunks = (await Promise.all(docsWithMeta.map((d) => chunkDocument(d, chunkingOpts, embedFn)))).flat();
@@ -264,7 +278,7 @@ export const ragIngestNode: NodePlugin = {
       embeddings.push(...(await embedFn(batch)));
     }
 
-    const store = getVectorStore(params.vectorStore as string | undefined);
+    const store = getVectorStore((vectorStoreSub?.store ?? params.vectorStore) as string | undefined);
     await store.upsert(
       namespace,
       allChunks.map((c, i) => ({ id: newId(), text: c.text, embedding: embeddings[i], metadata: c.meta }))
@@ -298,16 +312,20 @@ function toCitations(matches: ScoredEntry[]) {
 export const ragQueryNode: NodePlugin = {
   type: 'ragQuery',
   async execute({ input, params, credential }) {
-    const embeddingProvider = (String(params.embeddingProvider ?? 'openai') as EmbeddingProvider);
+    const subNodes = (params.$subNodes ?? {}) as Record<string, any>;
+    const embeddingSub = subNodes.embedding as { provider?: string } | undefined;
+    const vectorStoreSub = subNodes.vectorStore as { store?: string; namespace?: string } | undefined;
+
+    const embeddingProvider = (String(embeddingSub?.provider ?? params.embeddingProvider ?? 'openai') as EmbeddingProvider);
     const apiKey = resolveProviderApiKey(embeddingProvider, credential);
 
-    const namespace = String(params.namespace ?? 'default');
+    const namespace = String(vectorStoreSub?.namespace ?? params.namespace ?? 'default');
     const query = String(params.query ?? (typeof input === 'string' ? input : JSON.stringify(input ?? '')));
     const topK = Number(params.topK ?? 4);
     const filter = params.filter as Record<string, unknown> | undefined;
     const useHybrid = params.hybrid !== false; // default true
 
-    const store = getVectorStore(params.vectorStore as string | undefined);
+    const store = getVectorStore((vectorStoreSub?.store ?? params.vectorStore) as string | undefined);
     const candidatePool = Math.max(topK * 5, 20);
 
     const [queryEmbedding] = await embed(embeddingProvider, apiKey, [query]);

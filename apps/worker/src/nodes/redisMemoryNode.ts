@@ -40,7 +40,7 @@ import type { NodePlugin } from './types';
  *   turns?: Array<{ role, content }>          'write': multi-turn form (takes precedence over role/content)
  */
 
-interface ChatTurn {
+export interface ChatTurn {
   role: 'user' | 'assistant' | 'system';
   content: string;
   at: string;
@@ -67,6 +67,41 @@ function keyFor(sessionId: string): string {
 
 function toHistoryText(turns: ChatTurn[]): string {
   return turns.map((t) => `${t.role}: ${t.content}`).join('\n');
+}
+
+/** Shared by agentNode.ts: when an Agent's "Memory" sub-input is wired to a
+ *  Redis Chat Memory node, the agent uses these instead of its own local
+ *  file-based memory, so the connection on the canvas actually does
+ *  something instead of being purely decorative. */
+export async function readRedisTurns(sessionId: string, maxTurns = 20): Promise<ChatTurn[]> {
+  const redis = getRedis();
+  const raw = await redis.lrange(keyFor(sessionId), -maxTurns, -1);
+  return raw.map((r) => {
+    try {
+      return JSON.parse(r) as ChatTurn;
+    } catch {
+      return { role: 'user', content: r, at: new Date().toISOString() };
+    }
+  });
+}
+
+export async function appendRedisTurns(
+  sessionId: string,
+  turns: Array<{ role: ChatTurn['role']; content: string }>,
+  opts: { maxHistory?: number; ttlSeconds?: number } = {}
+): Promise<void> {
+  if (turns.length === 0) return;
+  const redis = getRedis();
+  const key = keyFor(sessionId);
+  const pipeline = redis.pipeline();
+  for (const turn of turns) pipeline.rpush(key, JSON.stringify({ ...turn, at: new Date().toISOString() }));
+  pipeline.ltrim(key, -(opts.maxHistory ?? 100), -1);
+  if (opts.ttlSeconds && opts.ttlSeconds > 0) pipeline.expire(key, opts.ttlSeconds);
+  await pipeline.exec();
+}
+
+export async function clearRedisTurns(sessionId: string): Promise<void> {
+  await getRedis().del(keyFor(sessionId));
 }
 
 export const redisMemoryNode: NodePlugin = {

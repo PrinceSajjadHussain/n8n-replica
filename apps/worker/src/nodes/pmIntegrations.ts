@@ -2,6 +2,7 @@ import axios from 'axios';
 import { registerNode } from './types';
 import type { NodePlugin } from './types';
 import { wrapIntegrationError } from './integrationErrors';
+import { rlValue } from './resourceLocatorValue';
 
 /**
  * trello — REST API wrapper over Trello's Cards/Boards/Lists endpoints.
@@ -22,7 +23,7 @@ export const trelloNode: NodePlugin = {
     try {
       if (action === 'createCard') {
         const response = await axios.post('https://api.trello.com/1/cards', null, {
-          params: { ...auth, idList: params.listId, name: params.name, desc: params.desc },
+          params: { ...auth, idList: rlValue(params.listId), name: params.name, desc: params.desc },
           timeout: 15000,
         });
         return { output: response.data };
@@ -39,7 +40,7 @@ export const trelloNode: NodePlugin = {
         return { output: response.data };
       }
       if (action === 'listCardsOnBoard') {
-        const response = await axios.get(`https://api.trello.com/1/boards/${params.boardId}/cards`, {
+        const response = await axios.get(`https://api.trello.com/1/boards/${rlValue(params.boardId)}/cards`, {
           params: auth,
           timeout: 15000,
         });
@@ -78,7 +79,7 @@ export const asanaNode: NodePlugin = {
       if (action === 'createTask') {
         const response = await axios.post(
           `${base}/tasks`,
-          { data: { name: params.name, notes: params.notes, projects: params.projectId ? [params.projectId] : [] } },
+          { data: { name: params.name, notes: params.notes, projects: params.projectId ? [rlValue(params.projectId)] : [] } },
           { headers, timeout: 15000 }
         );
         return { output: response.data };
@@ -96,7 +97,7 @@ export const asanaNode: NodePlugin = {
         return { output: response.data };
       }
       if (action === 'listTasksInProject') {
-        const response = await axios.get(`${base}/projects/${params.projectId}/tasks`, { headers, timeout: 15000 });
+        const response = await axios.get(`${base}/projects/${rlValue(params.projectId)}/tasks`, { headers, timeout: 15000 });
         return { output: response.data };
       }
       if (action === 'addComment') {
@@ -132,7 +133,7 @@ export const clickupNode: NodePlugin = {
     try {
       if (action === 'createTask') {
         const response = await axios.post(
-          `${base}/list/${params.listId}/task`,
+          `${base}/list/${rlValue(params.listId)}/task`,
           { name: params.name, description: params.description, status: params.status },
           { headers, timeout: 15000 }
         );
@@ -151,7 +152,7 @@ export const clickupNode: NodePlugin = {
         return { output: response.data };
       }
       if (action === 'listTasksInList') {
-        const response = await axios.get(`${base}/list/${params.listId}/task`, { headers, timeout: 15000 });
+        const response = await axios.get(`${base}/list/${rlValue(params.listId)}/task`, { headers, timeout: 15000 });
         return { output: response.data };
       }
       throw new Error(`clickup node: unknown action "${action}"`);
@@ -192,7 +193,7 @@ export const linearNode: NodePlugin = {
       if (action === 'createIssue') {
         const data = await gql(
           `mutation($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier url } } }`,
-          { input: { teamId: params.teamId, title: params.title, description: params.description } }
+          { input: { teamId: rlValue(params.teamId), title: params.title, description: params.description } }
         );
         return { output: data.issueCreate };
       }
@@ -212,7 +213,7 @@ export const linearNode: NodePlugin = {
       if (action === 'listIssues') {
         const data = await gql(
           `query($teamId: String) { issues(filter: { team: { id: { eq: $teamId } } }, first: 50) { nodes { id identifier title state { name } } } }`,
-          { teamId: params.teamId }
+          { teamId: rlValue(params.teamId) }
         );
         return { output: data.issues.nodes };
       }
@@ -247,7 +248,7 @@ export const jiraNode: NodePlugin = {
           `${base}/issue`,
           {
             fields: {
-              project: { key: params.projectKey },
+              project: { key: rlValue(params.projectKey) },
               summary: params.summary,
               description: {
                 type: 'doc',

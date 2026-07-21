@@ -49,6 +49,8 @@ interface Props {
   lastRunInput?: unknown;
   /** Real recorded output of the node feeding into this one (if any), used to seed the Test Node mock input instead of an empty object. */
   upstreamOutput?: unknown;
+  /** Every ancestor node reachable upstream of this one (not just direct parents), each with its own last-run output — powers the "reference any upstream node" dropdown in the I/O panel, matching n8n's node dropdown in the expression schema view. */
+  upstreamNodes?: { id: string; label: string; output: unknown }[];
   onChange: (updates: {
     label?: string;
     params?: Record<string, unknown>;
@@ -63,6 +65,207 @@ interface Props {
   }) => void;
   onDelete: () => void;
   onClose: () => void;
+}
+
+/** Inserts an expression string into whichever textarea/input currently has focus (used by both drag-drop and click-to-insert from the schema tree / table). Falls back to the clipboard if nothing is focused. */
+function insertIntoFocusedInput(expr: string) {
+  const active = document.activeElement as HTMLTextAreaElement | HTMLInputElement | null;
+  if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT')) {
+    const start = active.selectionStart ?? active.value.length;
+    const end = active.selectionEnd ?? active.value.length;
+    const next = active.value.slice(0, start) + expr + active.value.slice(end);
+    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set
+      ?? Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+    nativeInputValueSetter?.call(active, next);
+    active.dispatchEvent(new Event('input', { bubbles: true }));
+  } else {
+    navigator.clipboard.writeText(expr).catch(() => {});
+  }
+}
+
+/**
+ * NodeIoPanel — n8n-style Input/Output tabs, each with a Schema / Table / JSON
+ * sub-view toggle (matches n8n's node detail view: left pane = upstream
+ * input, right pane = this node's own output, both drag-to-insert).
+ */
+/** Extracts every `.binary` map across a node's output items into a flat, insertable field list — mirrors n8n's dedicated "Binary" tab for file-producing nodes (HTTP Request downloads, File Extract, etc.). */
+function extractBinaryFields(
+  output: unknown
+): { itemIdx: number; key: string; mimeType?: string; fileName?: string; fileSize?: number }[] {
+  const items = Array.isArray(output) ? output : output !== undefined ? [output] : [];
+  const fields: { itemIdx: number; key: string; mimeType?: string; fileName?: string; fileSize?: number }[] = [];
+  items.forEach((item, itemIdx) => {
+    const binary = item && typeof item === 'object' ? (item as Record<string, unknown>).binary : undefined;
+    if (!binary || typeof binary !== 'object') return;
+    for (const [key, meta] of Object.entries(binary as Record<string, unknown>)) {
+      const m = (meta ?? {}) as Record<string, unknown>;
+      fields.push({
+        itemIdx,
+        key,
+        mimeType: typeof m.mimeType === 'string' ? m.mimeType : undefined,
+        fileName: typeof m.fileName === 'string' ? m.fileName : undefined,
+        fileSize: typeof m.fileSize === 'number' ? m.fileSize : undefined,
+      });
+    }
+  });
+  return fields;
+}
+
+function BinaryView({
+  output,
+  nodeLabel,
+  refKind,
+  onInsert,
+}: {
+  output: unknown;
+  nodeLabel: string;
+  refKind: 'output' | 'input';
+  onInsert: (expr: string) => void;
+}) {
+  const fields = extractBinaryFields(output);
+  if (fields.length === 0) {
+    return <p className="text-[11px] text-muted px-2 py-3">No binary/file data on this side — run the node first.</p>;
+  }
+  const root = refKind === 'input' ? '$binary' : `$node["${nodeLabel}"].binary`;
+  return (
+    <div className="p-2 space-y-1.5 max-h-64 overflow-auto">
+      {fields.map((f, i) => {
+        const expr = `{{${root}.${f.key}}}`;
+        return (
+          <div
+            key={`${f.itemIdx}-${f.key}-${i}`}
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.setData('text/plain', expr);
+              e.dataTransfer.effectAllowed = 'copy';
+            }}
+            onClick={() => onInsert(expr)}
+            title={`Insert: ${expr}`}
+            className="flex items-center justify-between gap-2 px-2 py-1.5 rounded border border-panelBorder cursor-pointer hover:bg-signal/10"
+          >
+            <span className="text-[11px] font-display text-ink truncate">
+              📎 {f.fileName ?? f.key} <span className="text-muted">[{f.itemIdx}]</span>
+            </span>
+            <span className="text-[9px] text-muted shrink-0">
+              {f.mimeType ?? ''} {f.fileSize ? `· ${Math.round(f.fileSize / 1024)}KB` : ''}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function NodeIoPanel({
+  nodeLabel,
+  input,
+  output,
+  side,
+  view,
+  onSideChange,
+  onViewChange,
+  onInsert,
+  upstreamNodes = [],
+  refNodeId,
+  onRefNodeChange,
+}: {
+  nodeLabel: string;
+  input: unknown;
+  output: unknown;
+  side: 'input' | 'output';
+  view: 'schema' | 'table' | 'json' | 'binary';
+  onSideChange: (side: 'input' | 'output') => void;
+  onViewChange: (view: 'schema' | 'table' | 'json' | 'binary') => void;
+  onInsert: (expr: string) => void;
+  /** Ancestor nodes available to reference instead of this node's own input/output. */
+  upstreamNodes?: { id: string; label: string; output: unknown }[];
+  /** '' = viewing this node's own input/output; otherwise an upstream node id. */
+  refNodeId: string;
+  onRefNodeChange: (id: string) => void;
+}) {
+  const viewingUpstream = refNodeId !== '';
+  const upstreamNode = upstreamNodes.find((n) => n.id === refNodeId);
+  const activeData = viewingUpstream ? upstreamNode?.output : side === 'input' ? input : output;
+  const activeLabel = viewingUpstream ? upstreamNode?.label ?? nodeLabel : nodeLabel;
+  const activeRefKind: 'output' | 'input' = viewingUpstream ? 'output' : side;
+  const hasInput = input !== undefined;
+  const hasOutput = output !== undefined;
+
+  const tabBtn = (active: boolean) =>
+    `focus-ring flex-1 text-[10px] uppercase tracking-widest px-2 py-1 border-b-2 transition ${
+      active ? 'border-signal text-signal' : 'border-transparent text-muted hover:text-ink'
+    }`;
+  const viewBtn = (active: boolean) =>
+    `focus-ring text-[10px] px-2 py-0.5 rounded border transition ${
+      active ? 'border-signal/50 text-signal bg-signal/10' : 'border-panelBorder text-muted hover:text-ink'
+    }`;
+
+  return (
+    <div>
+      {/* Reference-node picker — lets you pull the schema/payload of ANY upstream
+          ancestor, not just this node's direct input, mirroring n8n's node dropdown
+          in the expression editor's schema pane. */}
+      {upstreamNodes.length > 0 && (
+        <div className="px-2 py-1.5 bg-canvas border-b border-panelBorder">
+          <select
+            value={refNodeId}
+            onChange={(e) => onRefNodeChange(e.target.value)}
+            className="focus-ring w-full bg-panel border border-panelBorder rounded-md px-2 py-1 text-[11px]"
+          >
+            <option value="">This node ({side === 'input' ? 'Input' : 'Output'})</option>
+            {upstreamNodes.map((n) => (
+              <option key={n.id} value={n.id}>
+                Node: {n.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {/* Input / Output tabs — hidden while referencing a specific upstream node,
+          since only that node's own output is meaningful there. */}
+      {!viewingUpstream && (
+        <div className="flex border-b border-panelBorder bg-canvas">
+          <button type="button" className={tabBtn(side === 'input')} onClick={() => onSideChange('input')} disabled={!hasInput}>
+            Input{!hasInput ? ' —' : ''}
+          </button>
+          <button type="button" className={tabBtn(side === 'output')} onClick={() => onSideChange('output')} disabled={!hasOutput}>
+            Output{!hasOutput ? ' —' : ''}
+          </button>
+        </div>
+      )}
+
+      {/* Schema / Table / JSON / Binary sub-view toggle */}
+      <div className="flex items-center gap-1 px-2 py-1.5 bg-canvas border-b border-panelBorder">
+        <button type="button" className={viewBtn(view === 'schema')} onClick={() => onViewChange('schema')}>Schema</button>
+        <button type="button" className={viewBtn(view === 'table')} onClick={() => onViewChange('table')}>Table</button>
+        <button type="button" className={viewBtn(view === 'json')} onClick={() => onViewChange('json')}>JSON</button>
+        <button type="button" className={viewBtn(view === 'binary')} onClick={() => onViewChange('binary')}>Binary</button>
+      </div>
+
+      {view === 'json' ? (
+        <div className="p-2">
+          {activeData === undefined ? (
+            <p className="text-[11px] text-muted px-2 py-3">No data yet — run the node first.</p>
+          ) : (
+            <pre className="text-[11px] bg-panel border border-panelBorder rounded-md p-2 max-h-64 overflow-auto">
+              {JSON.stringify(activeData, null, 2)}
+            </pre>
+          )}
+        </div>
+      ) : view === 'binary' ? (
+        <BinaryView output={activeData} nodeLabel={activeLabel} refKind={activeRefKind} onInsert={onInsert} />
+      ) : (
+        <SchemaTreeView
+          nodeLabel={activeLabel}
+          output={activeData}
+          refKind={activeRefKind}
+          view={view}
+          onInsert={onInsert}
+        />
+      )}
+    </div>
+  );
 }
 
 /** True if `output` looks like an `agent`/`agentOrchestrator` node result (has a non-empty `trace` array). */
@@ -98,12 +301,20 @@ export default function NodeConfigPanel({
   lastRunOutput,
   lastRunInput,
   upstreamOutput,
+  upstreamNodes = [],
   onChange,
   onDelete,
   onClose,
 }: Props) {
   const [showCredentialModal, setShowCredentialModal] = useState(false);
   const [schemaOpen, setSchemaOpen] = useState(false);
+  // n8n-style I/O panel: which side (input coming in / output produced) and
+  // which sub-view (field tree / spreadsheet table / raw JSON / binary) is shown.
+  const [ioSide, setIoSide] = useState<'input' | 'output'>('output');
+  const [ioView, setIoView] = useState<'schema' | 'table' | 'json' | 'binary'>('schema');
+  // '' = viewing this node's own input/output; otherwise the id of an upstream
+  // ancestor whose own last-run output is being browsed instead.
+  const [ioRefNodeId, setIoRefNodeId] = useState('');
   const requiredCredentialType = NODE_TYPE_TO_CREDENTIAL_TYPE[nodeType] as CredentialType | undefined;
   const [localLabel, setLocalLabel] = useState(label);
   const [localNotes, setLocalNotes] = useState(notes ?? '');
@@ -239,6 +450,7 @@ export default function NodeConfigPanel({
     setShowRawJson(!paramSchema);
     setTestInput(defaultTestInput());
     setTestInputMode((sessionStorage.getItem(`session:${workflowId ?? 'wf'}:${nodeId}:testMode`) as 'single' | 'array') || 'single');
+    setIoRefNodeId('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodeId]);
 
@@ -514,42 +726,36 @@ export default function NodeConfigPanel({
             </div>
           )}
 
+          {(lastRunOutput || lastRunInput || upstreamNodes.some((n) => n.output !== undefined)) && (
+            <div className="border border-panelBorder rounded-md overflow-hidden mb-2">
+              <button
+                type="button"
+                onClick={() => setSchemaOpen((v) => !v)}
+                className="focus-ring w-full flex items-center justify-between px-2 py-1.5 text-[10px] uppercase tracking-widest text-muted hover:text-ink bg-canvas"
+              >
+                <span>↗ Input / Output — drag to insert</span>
+                <span>{schemaOpen ? '▾' : '▸'}</span>
+              </button>
+              {schemaOpen && (
+                <NodeIoPanel
+                  nodeLabel={label}
+                  input={lastRunInput}
+                  output={lastRunOutput}
+                  side={ioSide}
+                  view={ioView}
+                  onSideChange={setIoSide}
+                  onViewChange={setIoView}
+                  onInsert={insertIntoFocusedInput}
+                  upstreamNodes={upstreamNodes}
+                  refNodeId={ioRefNodeId}
+                  onRefNodeChange={setIoRefNodeId}
+                />
+              )}
+            </div>
+          )}
+
           {paramSchema && paramSchema.fields.length > 0 && !showRawJson && (
             <>
-              {lastRunOutput && (
-                <div className="border border-panelBorder rounded-md overflow-hidden mb-2">
-                  <button
-                    type="button"
-                    onClick={() => setSchemaOpen((v) => !v)}
-                    className="focus-ring w-full flex items-center justify-between px-2 py-1.5 text-[10px] uppercase tracking-widest text-muted hover:text-ink bg-canvas"
-                  >
-                    <span>↗ Output schema — drag to insert</span>
-                    <span>{schemaOpen ? '▾' : '▸'}</span>
-                  </button>
-                  {schemaOpen && (
-                    <SchemaTreeView
-                      nodeLabel={label}
-                      output={lastRunOutput}
-                      onInsert={(expr) => {
-                        // Insert the expression into the focused input if possible,
-                        // otherwise copy to clipboard as fallback.
-                        const active = document.activeElement as HTMLTextAreaElement | HTMLInputElement | null;
-                        if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT')) {
-                          const start = active.selectionStart ?? active.value.length;
-                          const end = active.selectionEnd ?? active.value.length;
-                          const next = active.value.slice(0, start) + expr + active.value.slice(end);
-                          const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set
-                            ?? Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-                          nativeInputValueSetter?.call(active, next);
-                          active.dispatchEvent(new Event('input', { bubbles: true }));
-                        } else {
-                          navigator.clipboard.writeText(expr).catch(() => {});
-                        }
-                      }}
-                    />
-                  )}
-                </div>
-              )}
               <ParamForm
                 nodeType={nodeType}
                 schema={paramSchema}
@@ -775,8 +981,6 @@ function paramHint(nodeType: string): string {
       return 'e.g. { "field": "amount", "operator": "greaterThan", "value": 100 }';
     case 'filter':
       return 'e.g. { "field": "amount", "operator": "greaterThan", "value": 100 } — items that don\'t match the condition(s) are dropped; unlike IF there\'s only one output, no true/false branches';
-    case 'compareDatasets':
-      return 'e.g. { "matchFields": "id", "compareFields": "status,updatedAt" } — requires two upstream connections (Dataset A, Dataset B). Each output item is tagged _compare: "same" | "different" | "onlyInA" | "onlyInB" — route with a downstream IF/Switch/Filter on that field for a 4-way split.';
     case 'compareDatasets':
       return 'e.g. { "matchFields": "id", "compareFields": "status,updatedAt" } — requires two upstream connections (Dataset A, Dataset B). Each output item is tagged _compare: "same" | "different" | "onlyInA" | "onlyInB" — route with a downstream IF/Switch/Filter on that field for a 4-way split.';
     case 'executeWorkflowTrigger':

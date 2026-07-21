@@ -466,6 +466,15 @@ enum TriggerType {
   manual
   webhook
   schedule
+  chatTrigger
+  emailTrigger
+  fileWatcher
+  databaseChange
+  streamTrigger
+  rssTrigger
+  mqttTrigger
+  formTrigger
+  test
 }
 
 model Execution {

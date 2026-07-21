@@ -103,6 +103,10 @@ export type NodeType =
   | 'redisMemory'
   | 'agent'
   | 'agentOrchestrator'
+  | 'embeddingProvider'
+  | 'textSplitterConfig'
+  | 'vectorStoreConfig'
+  | 'agentTool'
   | 'dataTableRead'
   | 'dataTableWrite'
   | 'fileExtract'
@@ -228,6 +232,10 @@ export interface WorkflowEdge {
   source: string;
   target: string;
   sourceHandle?: string | null; // e.g. "true" / "false" for IF nodes
+  /** Which sub-input port on the target node this connects to (e.g.
+   *  "embedding" / "vectorStore" / "tool" / "model" / "memory") — undefined
+   *  or "main-in" means the regular main data pipe. */
+  targetHandle?: string | null;
 }
 
 export interface WorkflowGraph {

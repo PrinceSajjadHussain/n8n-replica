@@ -372,6 +372,38 @@ async function runLevels(opts: RunOptions): Promise<{ status: 'success' | 'faile
           },
         });
 
+        // ── Sub-node (non-main) connection resolution ───────────────────────
+        // Any node type can have "sub-input" ports (model/memory/tool/
+        // embedding/textSplitter/vectorStore/outputParser — see
+        // connectionTypes.ts) drawn as diamond handles instead of the main
+        // dot handle. Previously these were purely cosmetic: the executor
+        // only ever walked `main` edges, so wiring e.g. a Redis Chat Memory
+        // node into an Agent's Memory port did nothing at runtime. Here we
+        // collect every non-main incoming edge's already-computed source
+        // output, grouped by target handle id, so node plugins (ragNode.ts,
+        // agentNode.ts) can read `params.$subNodes.<handleId>` and actually
+        // honor what's wired on the canvas. Multiple connections to the same
+        // handle (e.g. several Tool nodes) collect into an array; a single
+        // connection stays a plain object for convenience.
+        const subNodesByHandle: Record<string, unknown[]> = {};
+        for (const edge of incoming) {
+          const handle = edge.targetHandle;
+          if (!handle || handle === 'main-in') continue; // main pipe, not a sub-node port
+          const sourceItems = nodeStatus.get(edge.source) === 'success' ? outputs.get(edge.source) : undefined;
+          if (!sourceItems || sourceItems.length === 0) continue;
+          const sourceNode = nodeMap.get(edge.source);
+          const value = { ...(sourceItems[0].json as Record<string, unknown>), $nodeType: sourceNode?.type };
+          if (!subNodesByHandle[handle]) subNodesByHandle[handle] = [];
+          subNodesByHandle[handle].push(value);
+        }
+        if (Object.keys(subNodesByHandle).length > 0) {
+          const subNodes: Record<string, unknown> = {};
+          for (const [handle, values] of Object.entries(subNodesByHandle)) {
+            subNodes[handle] = values.length === 1 ? values[0] : values;
+          }
+          resolvedParams.$subNodes = subNodes;
+        }
+
         const maxAttempts = Math.max(1, node.retry?.maxAttempts ?? 1);
         const retryDelayMs = node.retry?.delayMs ?? 1000;
 
