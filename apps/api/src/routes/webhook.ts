@@ -6,6 +6,58 @@ import { createExecutionQueue, createRedisConnection } from '../queue/queue';
 import type { ExecutionJobData } from '@flowforge/shared-types';
 import { randomUUID } from 'crypto';
 import { incrementUsage } from '../db/billing';
+import { verifyCalendlySignature, verifyDocusignSignature } from '../utils/webhookSignature';
+
+/**
+ * Node types that share the "path under /webhook or /webhook/test" URL
+ * scheme. `webhook` is the fully-generic trigger; `calendlyTrigger` and
+ * `docusignTrigger` are the same door but with automatic HMAC signature
+ * verification for their respective providers (see `verifyIncomingSignature`
+ * below) instead of requiring a hand-rolled Code/If node check.
+ */
+const WEBHOOK_FAMILY_TYPES = ['webhook', 'calendlyTrigger', 'docusignTrigger'] as const;
+type WebhookFamilyType = (typeof WEBHOOK_FAMILY_TYPES)[number];
+
+interface WebhookFamilyNode {
+  type: WebhookFamilyType;
+  params?: Record<string, unknown>;
+}
+
+/**
+ * For `calendlyTrigger`/`docusignTrigger` nodes, verifies the provider's
+ * HMAC signature against the node's `signingSecret` param before the
+ * caller is allowed to enqueue an execution. Returns `null` when the check
+ * passes (or doesn't apply — plain `webhook` nodes, or a trigger node with
+ * no `signingSecret` configured, which is allowed through unverified so a
+ * workflow author can still get started before wiring up the secret) and
+ * an Express-ready `{ statusCode, body }` rejection otherwise.
+ */
+function verifyIncomingSignature(
+  node: WebhookFamilyNode,
+  rawBody: Buffer | undefined,
+  headers: Record<string, string | string[] | undefined>
+): { statusCode: number; body: unknown } | null {
+  const signingSecret = (node.params?.signingSecret as string | undefined)?.trim();
+  if (!signingSecret) return null; // no secret configured — nothing to verify against
+
+  if (node.type === 'calendlyTrigger') {
+    const header = headers['calendly-webhook-signature'];
+    const result = verifyCalendlySignature(
+      rawBody,
+      Array.isArray(header) ? header[0] : header,
+      signingSecret
+    );
+    if (!result.ok) {
+      return { statusCode: 401, body: { error: `Calendly signature verification failed: ${result.reason}` } };
+    }
+  } else if (node.type === 'docusignTrigger') {
+    const result = verifyDocusignSignature(rawBody, headers, signingSecret);
+    if (!result.ok) {
+      return { statusCode: 401, body: { error: `DocuSign signature verification failed: ${result.reason}` } };
+    }
+  }
+  return null;
+}
 
 const redisConnection = createRedisConnection();
 export const executionQueue = createExecutionQueue(redisConnection);
@@ -123,10 +175,21 @@ webhookRouter.post('/test/:workflowId/:path', async (req, res) => {
   }
 
   const nodes = workflow.nodesJson as Array<{ type: string; params?: Record<string, unknown> }>;
-  const webhookNode = nodes.find((n) => n.type === 'webhook' && (n.params?.path ?? 'default') === path);
+  const webhookNode = nodes.find(
+    (n) =>
+      (WEBHOOK_FAMILY_TYPES as readonly string[]).includes(n.type) &&
+      (n.params?.path ?? 'default') === path
+  ) as WebhookFamilyNode | undefined;
   if (!webhookNode) {
     return res.status(404).json({ error: 'No webhook trigger matches this path in the current draft' });
   }
+
+  const sigRejection = verifyIncomingSignature(
+    webhookNode,
+    (req as unknown as { rawBody?: Buffer }).rawBody,
+    req.headers
+  );
+  if (sigRejection) return res.status(sigRejection.statusCode).json(sigRejection.body);
 
   const responseMode = (webhookNode.params?.responseMode as string | undefined) ?? 'immediately';
   const executionId = randomUUID();
@@ -134,7 +197,7 @@ webhookRouter.post('/test/:workflowId/:path', async (req, res) => {
     executionId,
     workflowId: workflow.id,
     userId: workflow.userId,
-    triggerType: 'webhook',
+    triggerType: webhookNode.type,
     triggerPayload: { body: req.body, query: req.query, headers: req.headers },
   };
 
@@ -183,10 +246,21 @@ webhookRouter.post('/:workflowId/:path', async (req, res) => {
   }
 
   const nodes = workflow.nodesJson as Array<{ type: string; params?: Record<string, unknown> }>;
-  const webhookNode = nodes.find((n) => n.type === 'webhook' && (n.params?.path ?? 'default') === path);
+  const webhookNode = nodes.find(
+    (n) =>
+      (WEBHOOK_FAMILY_TYPES as readonly string[]).includes(n.type) &&
+      (n.params?.path ?? 'default') === path
+  ) as WebhookFamilyNode | undefined;
   if (!webhookNode) {
     return res.status(404).json({ error: 'No webhook trigger matches this path' });
   }
+
+  const sigRejection = verifyIncomingSignature(
+    webhookNode,
+    (req as unknown as { rawBody?: Buffer }).rawBody,
+    req.headers
+  );
+  if (sigRejection) return res.status(sigRejection.statusCode).json(sigRejection.body);
 
   const responseMode = (webhookNode.params?.responseMode as string | undefined) ?? 'immediately';
   const executionId = randomUUID();
@@ -194,7 +268,7 @@ webhookRouter.post('/:workflowId/:path', async (req, res) => {
     executionId,
     workflowId: workflow.id,
     userId: workflow.userId,
-    triggerType: 'webhook',
+    triggerType: webhookNode.type,
     triggerPayload: { body: req.body, query: req.query, headers: req.headers },
   };
 

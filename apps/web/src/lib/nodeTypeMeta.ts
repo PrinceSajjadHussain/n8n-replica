@@ -44,6 +44,8 @@ export const NODE_TYPES: NodeTypeMeta[] = [
   { type: 'mqttTrigger', label: 'MQTT', category: 'Trigger', icon: '📶', iconKey: 'lucide:Radio', color: '#F59E0B' },
   { type: 'formTrigger', label: 'Form', category: 'Trigger', icon: '📝', iconKey: 'lucide:FileText', color: '#F59E0B' },
   { type: 'executeWorkflowTrigger', label: 'Execute Workflow Trigger', category: 'Trigger', icon: '🎯', iconKey: 'lucide:Target', color: '#F59E0B' },
+  { type: 'calendlyTrigger', label: 'Calendly Booking', category: 'Trigger', icon: '📅', iconKey: 'si:siCalendly', color: '#006BFF' },
+  { type: 'docusignTrigger', label: 'DocuSign Envelope', category: 'Trigger', icon: '✍️', iconKey: 'si:siDocusign', color: '#FFCC22' },
 
   { type: 'if', label: 'IF', category: 'Logic', icon: '⑂', iconKey: 'lucide:GitBranch', color: '#8B5CF6' },
   { type: 'filter', label: 'Filter', category: 'Logic', icon: '▽', iconKey: 'lucide:Filter', color: '#8B5CF6' },
@@ -122,6 +124,7 @@ export const NODE_TYPES: NodeTypeMeta[] = [
   { type: 'mixpanel', label: 'Mixpanel', category: 'Integration', icon: '📊', iconKey: 'si:siMixpanel', color: '#7856FF' },
   { type: 'calendly', label: 'Calendly', category: 'Integration', icon: '📅', iconKey: 'si:siCalendly', color: '#006BFF' },
   { type: 'docusign', label: 'DocuSign', category: 'Integration', icon: '✍️', iconKey: 'si:siDocusign', color: '#FFCC22' },
+  { type: 'airtable', label: 'Airtable', category: 'Integration', icon: '🗂', iconKey: 'si:siAirtable', color: '#FCB400' },
   { type: 'elasticsearch', label: 'Elasticsearch', category: 'Integration', icon: '🔍', iconKey: 'si:siElasticsearch', color: '#005571' },
   { type: 'sftp', label: 'SFTP / FTP', category: 'Integration', icon: '📁', iconKey: 'lucide:FolderSync', color: '#6B7280' },
   { type: 'linkedin', label: 'LinkedIn', category: 'Integration', icon: '💼', iconKey: 'si:siLinkedin', color: '#0A66C2' },

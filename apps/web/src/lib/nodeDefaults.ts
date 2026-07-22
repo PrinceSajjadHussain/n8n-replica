@@ -18,6 +18,8 @@
 export const NODE_DEFAULT_PARAMS: Record<string, Record<string, unknown>> = {
   // ---- triggers ----
   webhook: { path: 'default', responseMode: 'immediately' },
+  calendlyTrigger: { path: 'calendly', signingSecret: '' },
+  docusignTrigger: { path: 'docusign', signingSecret: '' },
   chatTrigger: { path: 'default', responseMode: 'lastNode' },
   schedule: { cron: '0 * * * *' },
   rssTrigger: { feedUrl: 'https://example.com/feed.xml', pollIntervalMinutes: 15 },
@@ -75,6 +77,7 @@ export const NODE_DEFAULT_PARAMS: Record<string, Record<string, unknown>> = {
   zoom: { action: 'createMeeting', topic: 'FlowForge meeting', startTime: '', duration: 30 },
   calendly: { action: 'listEvents' },
   docusign: { action: 'getEnvelopeStatus', envelopeId: 'REPLACE_ME' },
+  airtable: { action: 'list', baseId: 'REPLACE_ME', table: 'Table 1', maxRecords: 100 },
 
   // ---- monitoring / ops ----
   sentry: { action: 'listIssues' },
@@ -157,6 +160,18 @@ export const NODE_DEFAULT_MOCK_INPUT: Record<string, unknown> = {
   rssTrigger: { id: 'item-1', title: 'Sample feed item', link: 'https://example.com/post', pubDate: new Date().toISOString() },
   mqttTrigger: { topic: 'flowforge/events', value: 'sample payload' },
   schedule: { triggeredAt: new Date().toISOString() },
+  calendlyTrigger: {
+    event: 'invitee.created',
+    payload: {
+      event_type: { name: '30 Minute Meeting' },
+      invitee: { name: 'Jamie Doe', email: 'jamie@example.com' },
+      event: { start_time: new Date().toISOString(), uri: 'https://api.calendly.com/scheduled_events/EXAMPLE' },
+    },
+  },
+  docusignTrigger: {
+    event: 'envelope-completed',
+    data: { envelopeId: 'EXAMPLE-ENVELOPE-ID', envelopeSummary: { status: 'completed' } },
+  },
 };
 
 /** Returns the sample mock-input payload for a trigger node type, or `undefined` if none is defined. */

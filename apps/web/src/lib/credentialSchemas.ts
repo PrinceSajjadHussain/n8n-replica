@@ -51,6 +51,7 @@ export const CREDENTIAL_TYPES = [
   'mixpanel',
   'calendly',
   'docusign',
+  'airtable',
   'elasticsearch',
   'sftp',
   'linkedin',
@@ -119,6 +120,7 @@ export const CREDENTIAL_TYPE_META: Record<CredentialType, { label: string; color
   mixpanel: { label: 'Mixpanel', color: '#7856FF', letter: 'M' },
   calendly: { label: 'Calendly', color: '#006BFF', letter: 'C' },
   docusign: { label: 'DocuSign', color: '#FFCC22', letter: 'D' },
+  airtable: { label: 'Airtable', color: '#FCB400', letter: 'A' },
   elasticsearch: { label: 'Elasticsearch', color: '#005571', letter: 'E' },
   sftp: { label: 'SFTP / FTP', color: '#6B7280', letter: 'F' },
   linkedin: { label: 'LinkedIn', color: '#0A66C2', letter: 'L' },
@@ -528,6 +530,9 @@ export const CREDENTIAL_FIELDS: Record<CredentialType, CredentialField[]> = {
     { key: 'accountId', label: 'Account ID', fieldType: 'text', required: true },
     { key: 'basePath', label: 'Base path', fieldType: 'text', placeholder: 'https://demo.docusign.net/restapi', helpText: 'Defaults to the demo/sandbox base — use your production base URI for live use.' },
   ],
+  airtable: [
+    { key: 'apiKey', label: 'Personal access token', fieldType: 'password', required: true, helpText: 'airtable.com/create/tokens — needs data.records:read (and :write for create/update/delete) on the target base.' },
+  ],
   elasticsearch: [
     { key: 'node', label: 'Cluster URL', fieldType: 'text', required: true, placeholder: 'https://my-cluster.es.io:9243' },
     { key: 'apiKey', label: 'API key', fieldType: 'password', helpText: 'Use this OR username/password below, not both.' },
@@ -647,6 +652,7 @@ export const NODE_TYPE_TO_CREDENTIAL_TYPE: Record<string, CredentialType> = {
   mixpanel: 'mixpanel',
   calendly: 'calendly',
   docusign: 'docusign',
+  airtable: 'airtable',
   elasticsearch: 'elasticsearch',
   sftp: 'sftp',
   linkedin: 'linkedin',

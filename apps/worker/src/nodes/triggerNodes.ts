@@ -198,6 +198,40 @@ export const executeWorkflowTriggerNode: NodePlugin = {
   },
 };
 
+/**
+ * Calendly trigger — dedicated webhook-family trigger, no-op at execution
+ * time (same pattern as `webhook`/`chatTrigger`). Unlike the generic
+ * `webhook` node, the route that seeds this node's input
+ * (apps/api/src/routes/webhook.ts) verifies Calendly's
+ * `Calendly-Webhook-Signature` HMAC header itself (using the node's
+ * `signingSecret` param) and rejects bad/missing signatures with a 401
+ * before a job is ever enqueued — so a workflow author no longer has to
+ * hand-roll that check in a Code/If node. `input` is seeded with
+ * Calendly's raw event payload (`{ event, payload: {...} }`), matching
+ * what Calendly's webhook actually sends.
+ */
+export const calendlyTriggerNode: NodePlugin = {
+  type: 'calendlyTrigger',
+  async execute({ input }) {
+    return { output: input ?? {} };
+  },
+};
+
+/**
+ * DocuSign Connect trigger — dedicated webhook-family trigger, no-op at
+ * execution time. Same signature-verification treatment as
+ * `calendlyTrigger`: the route verifies DocuSign Connect's HMAC
+ * (`X-DocuSign-Signature-1`, base64 HMAC-SHA256) using the node's
+ * `signingSecret` param before enqueueing. `input` is seeded with
+ * DocuSign Connect's raw XML-derived/JSON envelope-status payload.
+ */
+export const docusignTriggerNode: NodePlugin = {
+  type: 'docusignTrigger',
+  async execute({ input }) {
+    return { output: input ?? {} };
+  },
+};
+
 registerNode(webhookNode);
 registerNode(scheduleNode);
 registerNode(emailTriggerNode);
@@ -209,3 +243,5 @@ registerNode(rssTriggerNode);
 registerNode(mqttTriggerNode);
 registerNode(formTriggerNode);
 registerNode(executeWorkflowTriggerNode);
+registerNode(calendlyTriggerNode);
+registerNode(docusignTriggerNode);

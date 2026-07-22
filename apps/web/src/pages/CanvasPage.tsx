@@ -877,22 +877,17 @@ function CanvasPageDesktop() {
     } catch {
       return; // handleSave already surfaced a toast
     }
-    // A workflow driven by a Chat Message trigger shouldn't be run via the
-    // generic /execute endpoint — that runs the chatTrigger node with its
-    // empty default params (you'd see it "succeed" with output {} before
-    // ever typing anything). Instead just open the test chat widget; the
-    // actual message you send is what triggers a real execution, via the
-    // /chat/test endpoint, with real input.
-    const chatTriggerNode = nodes.find((n) => n.data.nodeType === 'chatTrigger');
-    if (chatTriggerNode) {
-      setChatTestNodeId(chatTriggerNode.id);
-      return;
-    }
     try {
       const res = await api.post(`/workflows/${workflowId}/execute`, {});
       setActiveExecutionId(res.data?.executionId ?? null);
       setRunBanner('Execution enqueued…');
       pushCanvasToast('Run started', 'info');
+      // If this workflow is driven by a Chat Message trigger, pop the test
+      // chat widget open so there's an obvious way to actually send it a
+      // message — instead of leaving the person to hunt down the /chat/test
+      // webhook URL and POST to it by hand (curl/PowerShell etc).
+      const chatTriggerNode = nodes.find((n) => n.data.nodeType === 'chatTrigger');
+      if (chatTriggerNode) setChatTestNodeId(chatTriggerNode.id);
     } catch (err: any) {
       pushCanvasToast(err?.response?.data?.error ?? 'Failed to start run', 'error');
     }
@@ -1271,12 +1266,17 @@ function CanvasPageDesktop() {
             continueOnFail={Boolean(selectedNode.data.continueOnFail)}
             isPinned={Boolean(selectedNode.data.isPinned)}
             pinnedOutput={selectedNode.data.pinnedOutput}
+            lastRunExpressionErrors={(selectedNode.data as { lastRunExpressionErrors?: { param: string; message: string; type: string }[] }).lastRunExpressionErrors}
             notes={(selectedNode.data.notes as string | null) ?? null}
             otherNodeLabels={nodes.filter((n) => n.id !== selectedNode.id).map((n) => n.data.label)}
             workflowId={workflowId}
             replayExecutionId={replayExecution?.id}
             siblingWebhookPaths={nodes
-              .filter((n) => n.id !== selectedNode.id && n.data.nodeType === 'webhook')
+              .filter(
+                (n) =>
+                  n.id !== selectedNode.id &&
+                  (n.data.nodeType === 'webhook' || n.data.nodeType === 'calendlyTrigger' || n.data.nodeType === 'docusignTrigger')
+              )
               .map((n) => String((n.data.params as Record<string, unknown> | undefined)?.path ?? ''))
               .filter(Boolean)}
             siblingChatPaths={nodes

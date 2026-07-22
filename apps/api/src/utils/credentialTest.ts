@@ -172,6 +172,18 @@ export async function testCredentialConnection(
           ? { ok: true, message: 'Calendly token is valid.' }
           : { ok: false, message: `Calendly rejected the token (${res.status}).` };
       }
+      case 'airtable': {
+        const apiKey = data.apiKey as string | undefined;
+        if (!apiKey) return { ok: false, message: 'No personal access token stored.' };
+        // /v0/meta/whoami is the lightest authenticated Airtable endpoint —
+        // confirms the token itself is valid without needing a base id.
+        const res = await fetch('https://api.airtable.com/v0/meta/whoami', {
+          headers: { Authorization: `Bearer ${apiKey}` },
+        });
+        return res.ok
+          ? { ok: true, message: 'Airtable token is valid.' }
+          : { ok: false, message: `Airtable rejected the token (${res.status}).` };
+      }
       case 'amplitude':
       case 'mixpanel':
       case 'segment':

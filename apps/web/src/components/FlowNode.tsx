@@ -13,6 +13,7 @@ import CanvasHandleMainInput from './handles/CanvasHandleMainInput';
 import CanvasHandleMainOutput from './handles/CanvasHandleMainOutput';
 import CanvasHandleNonMainInput from './handles/CanvasHandleNonMainInput';
 import CanvasHandleNonMainOutput from './handles/CanvasHandleNonMainOutput';
+import { computeNodeIssues } from '../lib/Nodeissues';
 
 export type NodeStatus = 'idle' | 'running' | 'success' | 'failed' | 'skipped' | 'paused';
 
@@ -127,7 +128,12 @@ export default function FlowNode({ id, data, selected }: { id: string; data: Flo
     const firstInputId = ports.inputs[0]?.id;
     return !incomingConnections.some((c) => (c.targetHandle ?? firstInputId) === p.id);
   });
-  const hasIssues = requiredMissingPorts.length > 0;
+  const paramIssues = computeNodeIssues(
+    data.nodeType ?? '',
+    (data.params as Record<string, unknown> | undefined) ?? {},
+    data.credentialId as string | null | undefined
+  ).filter((i) => i.field !== 'credential'); // credential absence already has its own amber dot above
+  const hasIssues = requiredMissingPorts.length > 0 || paramIssues.length > 0;
 
   function handleAdd(port: NodePort, handleType: 'source' | 'target') {
     requestAdd({ nodeId: id, handleType, port });
@@ -269,9 +275,16 @@ export default function FlowNode({ id, data, selected }: { id: string; data: Flo
             )}
             {hasIssues && (
               <span
-                title={`Missing required connection${requiredMissingPorts.length > 1 ? 's' : ''}: ${requiredMissingPorts
-                  .map((p) => p.label || (isNonMain(p.type) ? p.type : 'input'))
-                  .join(', ')}`}
+                title={[
+                  requiredMissingPorts.length > 0
+                    ? `Missing required connection${requiredMissingPorts.length > 1 ? 's' : ''}: ${requiredMissingPorts
+                        .map((p) => p.label || (isNonMain(p.type) ? p.type : 'input'))
+                        .join(', ')}`
+                    : null,
+                  ...paramIssues.map((i) => i.message),
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
                 className="absolute -top-1.5 -left-1.5 w-3 h-3 rounded-full bg-alert border border-panel flex items-center justify-center text-panel leading-none"
                 style={{ fontSize: 8 }}
               >

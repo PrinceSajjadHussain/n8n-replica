@@ -250,7 +250,7 @@ export interface ExecutionJobData {
   executionId: string;
   workflowId: string;
   userId: string;
-  triggerType: 'manual' | 'webhook' | 'chatTrigger' | 'schedule' | 'emailTrigger' | 'fileWatcher' | 'databaseChange' | 'streamTrigger' | 'rssTrigger' | 'mqttTrigger' | 'formTrigger' | 'test';
+  triggerType: 'manual' | 'webhook' | 'chatTrigger' | 'schedule' | 'emailTrigger' | 'fileWatcher' | 'databaseChange' | 'streamTrigger' | 'rssTrigger' | 'mqttTrigger' | 'formTrigger' | 'calendlyTrigger' | 'docusignTrigger' | 'test';
   triggerPayload?: unknown;
 }
 

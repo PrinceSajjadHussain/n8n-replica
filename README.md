@@ -68,17 +68,21 @@ output — the standard front door for a PDF-RAG chatbot, see `docs/rag.md`), `s
 `emailTrigger` (real IMAP via `imapflow`, IDLE push with polling fallback), `fileWatcher`
 (`fs.watch`), `databaseChange` (Postgres LISTEN/NOTIFY), `streamTrigger` (Redis Streams
 consumer group, plus native Kafka and RabbitMQ consumers registered the same way — see
-"Triggers beyond webhook/schedule" below)
+"Triggers beyond webhook/schedule" below), `calendlyTrigger` / `docusignTrigger`
+(webhook-family triggers with automatic HMAC signature verification against each
+provider's own scheme — `Calendly-Webhook-Signature` / `X-DocuSign-Signature-*` — instead
+of requiring a hand-rolled Code/If node check)
 
 **Messaging / collaboration** — `slack`, `discord`, `telegram`, `whatsapp` (Meta Cloud
 API), `notion`, `github`
 
 **Business / CRM / commerce** — `stripe`, `twilio` (SMS, WhatsApp via Twilio, voice
-calls), `hubspot`, `salesforce`, `shopify`
+calls), `hubspot`, `salesforce`, `shopify`, `airtable` (list/get/create/update/upsert/
+delete records via the Airtable Web API)
 
 **Cloud / productivity** — `awsS3` (hand-rolled SigV4 signer, no AWS SDK dependency),
-`gmail`, `googleCalendar`, `googleSheets` *(stub — see below)*, `postgres` (arbitrary
-external DB access from a workflow)
+`gmail`, `googleCalendar`, `googleSheets` (real reads/appends via the Sheets v4 REST API,
+OAuth-authenticated), `postgres` (arbitrary external DB access from a workflow)
 
 **AI / agents** — `openai` (chat completions), `anthropic` (Claude Messages API),
 `gemini` (Google Gemini `generateContent` + `text-embedding-004`), `agent` (tool-using
@@ -99,8 +103,8 @@ viewer — see `docs/rag.md`
 **Browser automation** — `browserAutomation` (drives the optional `browser-runner`
 sidecar for real headless-Chrome scripting; see `docs/browser-automation.md`)
 
-**Stubbed, with a clear extension pattern** — `email` (generic SMTP send),
-`googleSheets` — see `apps/worker/src/nodes/stubNodes.ts`
+**Stubbed, with a clear extension pattern** — `email` (generic SMTP send) — see
+`apps/worker/src/nodes/stubNodes.ts`
 
 ### Community/marketplace nodes
 

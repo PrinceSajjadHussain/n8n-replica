@@ -181,6 +181,62 @@ head start for `ExpressionEditorInput.tsx` specifically.
 
 ---
 
+## FIX 4b — expressionErrors UI wiring — ✅ DONE (this session)
+
+- `NodeConfigPanel.tsx`: added `lastRunExpressionErrors` prop, rendered as an
+  inline amber warning list directly above the params form (distinct from
+  `ExpressionEditorInput`'s live-preview errors, which only reflect the
+  current unsaved edit — this shows failures from the node's actual last
+  execution).
+- `CanvasPage.tsx`: threads `selectedNode.data.lastRunExpressionErrors`
+  through to the new prop (the data was already on the wire from Fix 4 —
+  worker → socket.ts → executionStore/CanvasPage → FlowNode's
+  `NodeInspectPopover` — it just wasn't rendered in the config panel
+  itself).
+
+**Not done**: no live test (needs a running API + worker + a workflow with
+a deliberately broken expression).
+
+---
+
+## New — dedicated Calendly / DocuSign triggers (this session)
+
+Previously both integrations only supported "point Calendly/DocuSign at
+the generic `webhook` node and hand-verify the signature yourself in a
+Code/If node" (see `schedulingIntegrations.ts` header comments). Added:
+
+- `apps/worker/src/nodes/triggerNodes.ts` — new `calendlyTrigger` /
+  `docusignTrigger` no-op trigger node types (same pattern as `webhook`).
+- `apps/api/src/utils/webhookSignature.ts` — HMAC verification:
+  Calendly's `t=...,v1=...` header scheme, DocuSign Connect's
+  `X-DocuSign-Signature-*` (supports multiple keys for rotation).
+- `apps/api/src/index.ts` — `express.json({ verify })` now captures
+  `req.rawBody` so signatures can be checked against the exact signed
+  bytes (mirrors the existing Stripe raw-body pattern).
+- `apps/api/src/routes/webhook.ts` — both the test and production routes
+  now match any of `webhook` / `calendlyTrigger` / `docusignTrigger` by
+  path, verify the signature (via each node's optional `signingSecret`
+  param) before enqueueing, and reject with 401 on mismatch.
+- `packages/shared-types/src/index.ts` — extended
+  `ExecutionJobData['triggerType']`.
+- Frontend: palette entries, param schemas (`path` + `signingSecret`),
+  default params + realistic mock input, trigger port classification, and
+  the webhook URL-preview widget (reused, with a provider-specific
+  signature note) in `Paramform.tsx`/`CanvasPage.tsx`.
+
+**Not done**: no live test against real Calendly/DocuSign webhook
+deliveries (needs a public URL + a configured subscription/Connect
+config), no `tsc --noEmit` run (still no network access in this sandbox
+to install deps).
+
+**Correction to earlier gap analysis**: Fix 6's other three pieces
+(`ExpressionEditorInput.tsx`, `SchemaTreeView.tsx`,
+`ResourceLocatorInput.tsx`) and pin-data support turned out to already be
+built and wired into `Paramform.tsx`/`NodeConfigPanel.tsx` — this file
+was stale on that point before this session's read-through.
+
+---
+
 ## Priority order for next session
 
 1. **Get `pnpm install` running (needs network) and run the verification

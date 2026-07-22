@@ -542,12 +542,19 @@ export default function ParamForm({
         <FieldControl key={field.key} field={field} params={params} onChange={onChange} extraSuggestions={extraSuggestions} mockInput={mockInput} credentialId={credentialId} nodeType={nodeType} />
       ))}
 
-      {nodeType === 'webhook' && (
+      {(nodeType === 'webhook' || nodeType === 'calendlyTrigger' || nodeType === 'docusignTrigger') && (
         <WebhookGuidedExtras
           params={params}
           workflowId={workflowId}
           siblingPaths={siblingWebhookPaths}
           isWorkflowActive={isWorkflowActive}
+          signatureNote={
+            nodeType === 'calendlyTrigger'
+              ? 'Point a Calendly webhook subscription at this URL. If "Signing secret" above is set, requests are verified against Calendly-Webhook-Signature and rejected with 401 on mismatch.'
+              : nodeType === 'docusignTrigger'
+                ? 'Point a DocuSign Connect configuration at this URL. If "HMAC key" above is set, requests are verified against X-DocuSign-Signature-* and rejected with 401 on mismatch.'
+                : undefined
+          }
         />
       )}
       {nodeType === 'chatTrigger' && (
@@ -628,11 +635,14 @@ function WebhookGuidedExtras({
   workflowId,
   siblingPaths,
   isWorkflowActive,
+  signatureNote,
 }: {
   params: Record<string, unknown>;
   workflowId?: string;
   siblingPaths: string[];
   isWorkflowActive?: boolean;
+  /** Provider-specific note about built-in signature verification (calendlyTrigger/docusignTrigger only). */
+  signatureNote?: string;
 }) {
   const path = String(params.path ?? '');
   const urlBase = isWorkflowActive ? '/webhook' : '/webhook/test';
@@ -667,6 +677,7 @@ function WebhookGuidedExtras({
           Another webhook node in this workflow already uses path "{path}" — only one will ever be reachable.
         </p>
       )}
+      {signatureNote && <p className={helpClass}>{signatureNote}</p>}
     </div>
   );
 }

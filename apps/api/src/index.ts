@@ -39,7 +39,20 @@ app.use(cors());
 // Stripe webhook needs the raw, unparsed body for signature verification —
 // mounted ahead of the global express.json() below so it never gets parsed.
 app.use('/billing', billingWebhookRouter);
-app.use(express.json());
+// Capture the exact raw bytes of every JSON body as `req.rawBody` alongside
+// the normal parsed `req.body`. Needed by the `calendlyTrigger` /
+// `docusignTrigger` webhook nodes (see routes/webhook.ts +
+// utils/webhookSignature.ts), which must HMAC the *exact* bytes the sender
+// signed — re-serializing `req.body` can silently break the signature on
+// key-order/whitespace differences. Cheap (buffers are already in flight)
+// and non-breaking for every other route, which keeps using `req.body`.
+app.use(
+  express.json({
+    verify: (req, _res, buf) => {
+      (req as express.Request & { rawBody?: Buffer }).rawBody = buf;
+    },
+  })
+);
 app.use(express.urlencoded({ extended: true }));
 
 app.get('/health', (_req, res) => {

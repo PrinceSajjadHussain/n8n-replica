@@ -61,6 +61,7 @@ import './devInfraIntegrations';
 import './financeIntegrations';
 import './marketingIntegrations';
 import './schedulingIntegrations';
+import './airtableNode';
 import './socialIntegrations';
 
 import { loadCommunityNodes } from './communityLoader';

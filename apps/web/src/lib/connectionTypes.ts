@@ -85,6 +85,8 @@ const TRIGGER_TYPES = new Set([
   'mqttTrigger',
   'formTrigger',
   'executeWorkflowTrigger',
+  'calendlyTrigger',
+  'docusignTrigger',
 ]);
 
 /** Node types with no main output (flow terminators). */

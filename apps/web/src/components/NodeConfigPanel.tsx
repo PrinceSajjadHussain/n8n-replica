@@ -48,6 +48,8 @@ interface Props {
   lastRunOutput?: unknown;
   /** Last-run input for this node — used as $json mock context in ExpressionEditorInput live preview. */
   lastRunInput?: unknown;
+  /** Per-param expression failures from the node's last real execution (Fix 4 plumbing) — distinct from ExpressionEditorInput's live-preview errors, which only reflect the current unsaved edit. Surfaced as an inline warning list so a failed expression from an actual run is never silently invisible. */
+  lastRunExpressionErrors?: { param: string; message: string; type: string }[];
   /** Real recorded output of the node feeding into this one (if any), used to seed the Test Node mock input instead of an empty object. */
   upstreamOutput?: unknown;
   /** Every ancestor node reachable upstream of this one (not just direct parents), each with its own last-run output — powers the "reference any upstream node" dropdown in the I/O panel, matching n8n's node dropdown in the expression schema view. */
@@ -302,6 +304,7 @@ export default function NodeConfigPanel({
   onOpenChatTest,
   lastRunOutput,
   lastRunInput,
+  lastRunExpressionErrors = [],
   upstreamOutput,
   upstreamNodes = [],
   onChange,
@@ -771,6 +774,21 @@ export default function NodeConfigPanel({
                   onRefNodeChange={setIoRefNodeId}
                 />
               )}
+            </div>
+          )}
+
+          {lastRunExpressionErrors.length > 0 && (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400 grid gap-1">
+              <p className="font-medium">
+                {lastRunExpressionErrors.length} expression error{lastRunExpressionErrors.length === 1 ? '' : 's'} on the last run
+              </p>
+              <ul className="list-disc pl-4 grid gap-0.5">
+                {lastRunExpressionErrors.map((e, i) => (
+                  <li key={`${e.param}-${i}`}>
+                    <code className="text-[11px]">{e.param}</code> ({e.type}): {e.message}
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
 

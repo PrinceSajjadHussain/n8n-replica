@@ -21,19 +21,12 @@ import type { CommunityNodeManifest } from '@flowforge/shared-types';
 type CuratedEntry = Omit<CommunityNodeManifest, 'downloadsLastMonth'>;
 
 export const CURATED_REGISTRY_INDEX: CuratedEntry[] = [
-  {
-    name: 'flowforge-node-airtable',
-    version: '1.0.0',
-    description: 'Read, create, and update records in Airtable bases.',
-    author: 'community',
-    nodeTypes: ['airtable'],
-    npmPackage: 'flowforge-node-airtable',
-    homepage: 'https://www.npmjs.com/package/flowforge-node-airtable',
-    changelogUrl: 'https://www.npmjs.com/package/flowforge-node-airtable?activeTab=versions',
-    source: 'npm',
-    category: 'Storage',
-    verified: true,
-  },
+  // NOTE: 'airtable' used to be listed here as an illustrative community npm
+  // package (flowforge-node-airtable) that didn't actually exist on npm.
+  // It's now a real, first-class core node
+  // (apps/worker/src/nodes/airtableNode.ts) registered directly in
+  // NODE_REGISTRY, so the curated marketplace entry was removed — see the
+  // 'zendesk'/'mailchimp' note just below for the same pattern.
   // NOTE: 'zendesk' and 'mailchimp' used to be listed here as illustrative
   // community npm packages (flowforge-node-zendesk / flowforge-node-mailchimp)
   // that didn't actually exist on npm. Both are now real, first-class core

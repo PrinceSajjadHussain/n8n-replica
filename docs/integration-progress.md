@@ -22,7 +22,7 @@ integration batch).
 | Calendly | ✅ Done (this session) | `schedulingIntegrations.ts` — action-side node (list/get invitee/cancel). Booking trigger reuses the generic `webhook` trigger node + signature verification in workflow logic, not a dedicated trigger type — see file header comment. |
 | Trello / Asana / ClickUp / Linear | ✅ Done (prior session) | `pmIntegrations.ts` |
 | Jira | ✅ Done (prior session) | `pmIntegrations.ts` |
-| Airtable | ⬜ Not done | Still only a curated marketplace/npm entry (illustrative, not a real package) — same gap the original prompt called out. Not addressed this session. |
+| Airtable | ✅ Done (this session) | `airtableNode.ts` — real core node: list/get/create/update/upsert/delete via the Airtable Web API. Was previously only an illustrative marketplace/npm entry (removed from `registryIndex.ts`). |
 | DocuSign | ✅ Done (this session) | `schedulingIntegrations.ts` — send envelope + status check. Completion webhook: point DocuSign Connect at the generic `webhook` trigger, same pattern as Calendly. |
 
 ### Finance / commerce
@@ -88,6 +88,6 @@ prompt doc:
 ## Known gaps / follow-ups from this session
 
 - **New worker deps not installed**: `ssh2-sftp-client` and `basic-ftp` were added to `apps/worker/package.json` but this sandbox has no network access to `pnpm install` them or run a real build. Run `pnpm install` at the repo root, then `pnpm -F api exec tsc --noEmit` and `pnpm -F web exec tsc --noEmit` before treating this batch as fully verified — that was requested in the original prompt's process section and wasn't yet possible here.
-- **Airtable and Opsgenie** are the two explicitly-mentioned items from the original list still not implemented at all.
+- **Opsgenie** is the one item from the original list still not implemented at all. (Airtable was completed in a later session — see its row above.)
 - **Google Ads / Meta Ads** are read-only (metrics pull), matching the prompt's stated scope — no campaign-write actions were built.
 - The stale `flowforge-node-zendesk` / `flowforge-node-mailchimp` curated marketplace entries were removed from `apps/api/src/marketplace/registryIndex.ts` since both are now real core nodes. Note the repo still has a handful of *other* pre-existing core node types (linear, jira, dropbox, stripe, asana, trello, clickup) that are simultaneously registered as built-in nodes **and** listed as curated npm marketplace entries — that inconsistency predates this session and wasn't in scope to fix, but is worth cleaning up in a future pass.

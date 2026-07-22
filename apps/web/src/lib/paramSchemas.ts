@@ -30,6 +30,13 @@ interface FieldBase {
   visibleIf?: (params: Record<string, unknown>) => boolean;
   /** Returns an error string, or null if valid. */
   validate?: (value: unknown, params: Record<string, unknown>) => string | null;
+  /** Marks this field as required for the node to run at all — surfaced as a
+   *  pre-flight "issue" (see lib/nodeIssues.ts) when empty, the same way n8n
+   *  flags a node with a red badge before you ever click Run. Only set on
+   *  the handful of fields where an empty value is a guaranteed runtime
+   *  failure (not merely unusual) — this is deliberately conservative
+   *  rather than exhaustive across all ~150 node types. */
+  required?: boolean;
 }
 
 export interface EnumOption {
@@ -126,6 +133,46 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
     ],
   },
 
+  calendlyTrigger: {
+    fields: [
+      {
+        key: 'path',
+        label: 'Path',
+        type: 'string',
+        placeholder: 'calendly',
+        help: 'Becomes /webhook/:workflowId/<path>. Point a Calendly webhook subscription at this URL.',
+        validate: (v) => (v && !/^[a-zA-Z0-9\-_]+$/.test(String(v)) ? 'Only letters, numbers, - and _ are allowed' : null),
+      },
+      {
+        key: 'signingSecret',
+        label: 'Signing secret (optional)',
+        type: 'string',
+        placeholder: 'paste the webhook subscription signing key',
+        help: 'From Calendly → Integrations → Webhooks. When set, incoming requests are verified against the Calendly-Webhook-Signature header and rejected with 401 on mismatch — no Code/If node needed.',
+      },
+    ],
+  },
+
+  docusignTrigger: {
+    fields: [
+      {
+        key: 'path',
+        label: 'Path',
+        type: 'string',
+        placeholder: 'docusign',
+        help: 'Becomes /webhook/:workflowId/<path>. Point a DocuSign Connect configuration at this URL.',
+        validate: (v) => (v && !/^[a-zA-Z0-9\-_]+$/.test(String(v)) ? 'Only letters, numbers, - and _ are allowed' : null),
+      },
+      {
+        key: 'signingSecret',
+        label: 'HMAC key (optional)',
+        type: 'string',
+        placeholder: 'paste the Connect configuration HMAC key',
+        help: 'From DocuSign Connect configuration → HMAC Signature. When set, incoming requests are verified against X-DocuSign-Signature-* headers and rejected with 401 on mismatch — no Code/If node needed.',
+      },
+    ],
+  },
+
   schedule: {
     fields: [
       {
@@ -140,7 +187,7 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
 
   httpRequest: {
     fields: [
-      { key: 'url', label: 'URL', type: 'expression', placeholder: 'https://api.example.com/orders' },
+      { key: 'url', label: 'URL', type: 'expression', placeholder: 'https://api.example.com/orders', required: true },
       {
         key: 'method',
         label: 'Method',
@@ -704,7 +751,7 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
 
   slack: {
     fields: [
-      { key: 'text', label: 'Message text', type: 'expression', placeholder: 'New order received!' },
+      { key: 'text', label: 'Message text', type: 'expression', placeholder: 'New order received!', required: true },
     ],
   },
 
@@ -720,8 +767,8 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
           { value: 'get', label: 'Get rows' },
         ],
       },
-      { key: 'spreadsheetId', label: 'Spreadsheet ID', type: 'string', placeholder: '1BxiMV...' },
-      { key: 'range', label: 'Range', type: 'string', placeholder: 'Sheet1!A:C' },
+      { key: 'spreadsheetId', label: 'Spreadsheet ID', type: 'string', placeholder: '1BxiMV...', required: true },
+      { key: 'range', label: 'Range', type: 'string', placeholder: 'Sheet1!A:C', required: true },
       {
         key: 'values',
         label: 'Values (rows x cols JSON)',
@@ -1474,8 +1521,8 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
         help: 'Picks the Owner and Repo fields below for you — or just type/paste them there directly.',
         splitInto: { ownerKey: 'owner', nameKey: 'repo' },
       },
-      { key: 'owner', label: 'Owner', type: 'string', placeholder: 'octocat' },
-      { key: 'repo', label: 'Repo', type: 'string', placeholder: 'hello-world' },
+      { key: 'owner', label: 'Owner', type: 'string', placeholder: 'octocat', required: true },
+      { key: 'repo', label: 'Repo', type: 'string', placeholder: 'hello-world', required: true },
       {
         key: 'issueNumber',
         label: 'Issue number',
@@ -2093,6 +2140,34 @@ export const PARAM_SCHEMAS: Record<string, ParamSchema> = {
       },
       { key: 'envelope', label: 'Envelope (JSON)', type: 'json', rows: 5, default: { emailSubject: 'Please sign', status: 'sent' }, help: 'DocuSign envelope definition — see DocuSign eSignature API docs.', visibleIf: (p) => (p.action ?? 'sendEnvelope') === 'sendEnvelope' },
       { key: 'envelopeId', label: 'Envelope ID', type: 'string', visibleIf: (p) => p.action === 'getEnvelopeStatus' },
+    ],
+  },
+
+  airtable: {
+    fields: [
+      {
+        key: 'action',
+        label: 'Action',
+        type: 'enum',
+        default: 'list',
+        options: [
+          { value: 'list', label: 'List records' },
+          { value: 'get', label: 'Get record' },
+          { value: 'create', label: 'Create record' },
+          { value: 'update', label: 'Update record' },
+          { value: 'upsert', label: 'Upsert record (match on a field)' },
+          { value: 'delete', label: 'Delete record' },
+        ],
+      },
+      { key: 'baseId', label: 'Base ID', type: 'string', placeholder: 'appXXXXXXXXXXXXXX', help: 'Found in the Airtable API docs page for your base, or the base URL.', required: true },
+      { key: 'table', label: 'Table name or ID', type: 'string', placeholder: 'Table 1', required: true },
+      { key: 'recordId', label: 'Record ID', type: 'string', visibleIf: (p) => ['get', 'update', 'delete'].includes(String(p.action ?? 'list')) },
+      { key: 'fields', label: 'Fields (JSON)', type: 'json', rows: 5, default: {}, visibleIf: (p) => ['create', 'update', 'upsert'].includes(String(p.action ?? 'list')) },
+      { key: 'matchField', label: 'Match field', type: 'string', help: 'Field name to look up an existing record by before deciding create vs. update.', visibleIf: (p) => p.action === 'upsert' },
+      { key: 'matchValue', label: 'Match value', type: 'string', visibleIf: (p) => p.action === 'upsert' },
+      { key: 'view', label: 'View (optional)', type: 'string', visibleIf: (p) => (p.action ?? 'list') === 'list' },
+      { key: 'filterByFormula', label: 'Filter formula (optional)', type: 'string', placeholder: '{Status} = "Open"', visibleIf: (p) => (p.action ?? 'list') === 'list' },
+      { key: 'maxRecords', label: 'Max records', type: 'number', default: 100, visibleIf: (p) => (p.action ?? 'list') === 'list' },
     ],
   },
 };
